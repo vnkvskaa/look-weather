@@ -864,7 +864,7 @@ img {
 
 .day-media {
   position: relative;
-  width: 132px;
+  width: 100%;
   flex-shrink: 0;
   display: grid;
   gap: 6px;
@@ -873,7 +873,7 @@ img {
 .day-swipe {
   display: flex;
   gap: 0;
-  width: 132px;
+  width: 100%;
   aspect-ratio: 3 / 4;
   overflow-x: auto;
   scroll-snap-type: x mandatory;
