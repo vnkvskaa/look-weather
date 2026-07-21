@@ -1,4 +1,4 @@
-import { getSettings, listLooks, saveSettings } from '../db'
+import { getSettings, countLooks, saveSettings } from '../db'
 import type { Settings } from '../types'
 import {
   buildBackup,
@@ -103,29 +103,26 @@ export async function verifyGithubBackup(): Promise<{
   return { login, hasCopy }
 }
 
+/**
+ * Autobackup / gist always uses thumbs — avoids OOM and gist size caps.
+ */
 async function buildSizedBackup(): Promise<{
   json: string
   recompressed: boolean
 }> {
-  let payload = await buildBackup()
-  let json = JSON.stringify(payload)
-  let recompressed = false
-
-  if (json.length > GIST_SOFT_BYTES) {
-    payload = await buildBackup({
-      recompress: { maxSide: 900, quality: 0.62 },
-    })
-    json = JSON.stringify(payload)
-    recompressed = true
-  }
+  const payload = await buildBackup({ photo: 'thumb' })
+  const json = JSON.stringify(payload)
 
   if (json.length > GIST_HARD_BYTES) {
     throw new Error(
-      'Копия слишком большая для GitHub. Экспортируй в файлы или сократи архив.',
+      'Копия слишком большая для GitHub. Экспортируй полную копию в файлы или удали лишние луки.',
     )
   }
 
-  return { json, recompressed }
+  return {
+    json,
+    recompressed: json.length > GIST_SOFT_BYTES,
+  }
 }
 
 export type GithubBackupResult = {
@@ -169,7 +166,6 @@ export async function saveBackupToGithub(): Promise<GithubBackupResult> {
       )
     }
     if (res.status === 404 && gistId) {
-      // Stale id — create a new private gist
       const created = await fetch('https://api.github.com/gists', {
         method: 'POST',
         headers: authHeaders(token),
@@ -194,8 +190,7 @@ async function finishSave(
   recompressed: boolean,
   bytes: number,
 ): Promise<GithubBackupResult> {
-  const looks = await listLooks()
-  const next = await markBackupDone(looks.length)
+  const next = await markBackupDone(await countLooks())
   await saveSettings({
     ...next,
     githubToken: settings.githubToken,
@@ -232,13 +227,11 @@ export async function restoreBackupFromGithub(): Promise<{
 
   const data = (await res.json()) as GistResponse
   const file =
-    data.files?.[GIST_FILENAME] ??
-    Object.values(data.files ?? {})[0]
+    data.files?.[GIST_FILENAME] ?? Object.values(data.files ?? {})[0]
   if (!file?.content) {
     throw new Error('В копии на GitHub нет файла бэкапа')
   }
 
-  // Large files may need a raw_url fetch — GitHub truncates sometimes
   let text = file.content
   const raw = (file as GistFile & { raw_url?: string; truncated?: boolean })
     .raw_url

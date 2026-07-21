@@ -166,3 +166,18 @@ export function groupDayGroupsByMonth(
     .sort((a, b) => b.localeCompare(a))
     .map((month) => ({ month, groups: byMonth.get(month)! }))
 }
+
+/**
+ * Flat sort by primary look feelsLike.
+ * Default cold → warm (asc). Pass desc for warm → cold.
+ */
+export function sortDayGroupsByFeelsLike(
+  groups: DayGroup[],
+  direction: 'asc' | 'desc' = 'asc',
+): DayGroup[] {
+  return [...groups].sort((a, b) => {
+    const diff = a.primary.weather.feelsLike - b.primary.weather.feelsLike
+    if (diff !== 0) return direction === 'asc' ? diff : -diff
+    return b.date.localeCompare(a.date)
+  })
+}

@@ -1,7 +1,16 @@
-import { listLooks, mergeLooks, getSettings, saveSettings } from '../db'
+import {
+  listLooksMeta,
+  mergeLooks,
+  getSettings,
+  saveSettings,
+  getLookPhoto,
+  getLookThumbBlob,
+  getLookFullBlob,
+  countLooks,
+} from '../db'
 import type { Look, LookExport, Place, Settings } from '../types'
 import { normalizeFeedback } from '../types'
-import { base64ToBlob, blobToBase64, compressImage } from './media'
+import { base64ToBlob, blobToBase64, prepareLookImages } from './media'
 
 export type BackupPayload = {
   version: 1
@@ -43,33 +52,48 @@ export type ImportResult = {
 }
 
 export type BackupBuildOptions = {
-  /** Re-encode photos smaller for gist size limits */
-  recompress?: { maxSide: number; quality: number }
+  /**
+   * thumbs — compact (gist / auto). full — larger file export.
+   * Default thumbs to avoid OOM / gist limits.
+   */
+  photo?: 'thumb' | 'full'
 }
 
+/**
+ * Build backup one look at a time — never loads all photo blobs into RAM.
+ */
 export async function buildBackup(
   options: BackupBuildOptions = {},
 ): Promise<BackupPayload> {
-  const [looks, settings] = await Promise.all([listLooks(), getSettings()])
+  const photoKind = options.photo ?? 'thumb'
+  const [looks, settings] = await Promise.all([
+    listLooksMeta(),
+    getSettings(),
+  ])
   const exported: LookExport[] = []
+
   for (const look of looks) {
-    let photoBlob = look.photoBlob
-    if (options.recompress) {
-      const file = new File([photoBlob], 'look.jpg', {
-        type: photoBlob.type || 'image/jpeg',
-      })
-      photoBlob = await compressImage(
-        file,
-        options.recompress.maxSide,
-        options.recompress.quality,
-      )
+    let photoBlob: Blob | null = null
+    if (photoKind === 'thumb') {
+      photoBlob = await getLookThumbBlob(look.id)
+    } else {
+      photoBlob = await getLookFullBlob(look.id)
     }
-    const { photoBlob: _blob, ...rest } = look
+    if (!photoBlob) {
+      const row = await getLookPhoto(look.id)
+      photoBlob = row?.blob ?? row?.thumbBlob ?? null
+    }
+    if (!photoBlob) continue
+
     exported.push({
-      ...rest,
+      ...look,
       photoBase64: await blobToBase64(photoBlob),
+      photoKind,
     })
+    // Yield so UI stays responsive on large archives
+    await new Promise((r) => setTimeout(r, 0))
   }
+
   return {
     version: 1,
     exportedAt: new Date().toISOString(),
@@ -78,12 +102,8 @@ export async function buildBackup(
   }
 }
 
-export async function shareOrDownloadBackup(): Promise<void> {
-  const payload = await buildBackup()
-  const text = JSON.stringify(payload)
+async function downloadJson(text: string, filename: string): Promise<void> {
   const blob = new Blob([text], { type: 'application/json' })
-  const filename = `look-weather-${payload.exportedAt.slice(0, 10)}.json`
-
   const file = new File([blob], filename, { type: 'application/json' })
   if (navigator.share && navigator.canShare?.({ files: [file] })) {
     await navigator.share({
@@ -102,6 +122,24 @@ export async function shareOrDownloadBackup(): Promise<void> {
   URL.revokeObjectURL(url)
 }
 
+/** Compact copy (thumbs) — safe for cloud / everyday. */
+export async function shareOrDownloadBackup(): Promise<void> {
+  const payload = await buildBackup({ photo: 'thumb' })
+  const text = JSON.stringify(payload)
+  const filename = `look-weather-${payload.exportedAt.slice(0, 10)}.json`
+  await downloadJson(text, filename)
+}
+
+/**
+ * Full-resolution copy. Can be large — caller should warn the user first.
+ */
+export async function shareOrDownloadFullBackup(): Promise<void> {
+  const payload = await buildBackup({ photo: 'full' })
+  const text = JSON.stringify(payload)
+  const filename = `look-weather-full-${payload.exportedAt.slice(0, 10)}.json`
+  await downloadJson(text, filename)
+}
+
 export async function importBackupPayload(
   data: BackupPayload,
 ): Promise<ImportResult> {
@@ -109,29 +147,39 @@ export async function importBackupPayload(
     throw new Error('Неверный формат бэкапа')
   }
 
-  const looks: Look[] = data.looks.map((item) => {
-    const { photoBase64, ...rest } = item
-    return {
+  const looks: Array<Look & { photoBlob: Blob; thumbBlob?: Blob }> = []
+
+  for (const item of data.looks) {
+    const { photoBase64, photoKind: _kind, ...rest } = item
+    const raw = base64ToBlob(photoBase64)
+    let photoBlob = raw
+    let thumbBlob: Blob | undefined
+    try {
+      const prepared = await prepareLookImages(raw)
+      photoBlob = prepared.blob
+      thumbBlob = prepared.thumbBlob
+    } catch {
+      thumbBlob = raw
+    }
+    looks.push({
       ...rest,
       feedback: normalizeFeedback(rest.feedback),
       favorite: rest.favorite === true ? true : undefined,
-      photoBlob: base64ToBlob(photoBase64),
-    }
-  })
+      photoBlob,
+      thumbBlob,
+    })
+    await new Promise((r) => setTimeout(r, 0))
+  }
 
   const current = await getSettings()
-  // Merge by id — local-only looks stay; same id gets backup version
   const { imported, total } = await mergeLooks(looks)
   if (data.settings) {
     const fromBackup = settingsForBackup(data.settings)
     await saveSettings({
       ...current,
       ...fromBackup,
-      // Keep local PAT — never overwrite from backup JSON
       githubToken: current.githubToken,
-      githubGistId:
-        data.settings.githubGistId || current.githubGistId,
-      // Prefer local home if backup has none
+      githubGistId: data.settings.githubGistId || current.githubGistId,
       homePlace: fromBackup.homePlace ?? current.homePlace,
     })
   }
@@ -164,12 +212,13 @@ export function shouldRemindBackup(
   return false
 }
 
-export async function markBackupDone(looksCount: number): Promise<Settings> {
+export async function markBackupDone(looksCount?: number): Promise<Settings> {
   const settings = await getSettings()
+  const count = looksCount ?? (await countLooks())
   const next: Settings = {
     ...settings,
     lastBackupAt: Date.now(),
-    looksCountAtBackup: looksCount,
+    looksCountAtBackup: count,
     backupReminderDismissedAt: undefined,
   }
   await saveSettings(next)

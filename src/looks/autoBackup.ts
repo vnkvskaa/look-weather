@@ -139,7 +139,7 @@ async function runAutoBackup(): Promise<void> {
     notify({
       kind: 'ok',
       message: result.recompressed
-        ? 'сохранено — фото сжаты'
+        ? 'сохранено — превью'
         : 'сохранено',
     })
     if (clearOkTimer) clearTimeout(clearOkTimer)

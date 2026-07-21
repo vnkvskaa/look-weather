@@ -8,6 +8,7 @@ import {
   monthKey,
   pickPrimaryLook,
   placeSummary,
+  sortDayGroupsByFeelsLike,
 } from './dayGroups'
 import type { Look, WeatherProfile } from '../types'
 
@@ -28,7 +29,6 @@ function weather(partial: Partial<WeatherProfile> = {}): WeatherProfile {
 function look(partial: Partial<Look> & Pick<Look, 'id' | 'date'>): Look {
   return {
     createdAt: 1,
-    photoBlob: new Blob(),
     placeName: 'Москва',
     latitude: 55.75,
     longitude: 37.62,
@@ -119,5 +119,29 @@ describe('month helpers', () => {
       '2026-07-10',
       '2026-07-02',
     ])
+  })
+})
+
+describe('sortDayGroupsByFeelsLike', () => {
+  it('sorts cold to warm by default', () => {
+    const groups = groupLooksByDate([
+      look({
+        id: 'warm',
+        date: '2026-07-10',
+        weather: weather({ date: '2026-07-10', feelsLike: 22 }),
+      }),
+      look({
+        id: 'cold',
+        date: '2026-07-11',
+        weather: weather({ date: '2026-07-11', feelsLike: 5 }),
+      }),
+      look({
+        id: 'mid',
+        date: '2026-07-12',
+        weather: weather({ date: '2026-07-12', feelsLike: 12 }),
+      }),
+    ])
+    const sorted = sortDayGroupsByFeelsLike(groups)
+    expect(sorted.map((g) => g.primary.id)).toEqual(['cold', 'mid', 'warm'])
   })
 })

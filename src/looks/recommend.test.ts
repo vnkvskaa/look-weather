@@ -33,7 +33,6 @@ function look(partial: Partial<Look> & Pick<Look, 'id' | 'weather'>): Look {
   return {
     createdAt: 1,
     date: partial.date ?? partial.weather.date,
-    photoBlob: new Blob(),
     placeName: 'Москва',
     latitude: 55.75,
     longitude: 37.62,

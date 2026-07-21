@@ -10,15 +10,22 @@ import {
 import {
   addLook,
   deleteLook,
+  estimateStorage,
+  getLookFullBlob,
+  getLookThumbBlob,
   getSettings,
-  listLooks,
+  isStorageLow,
+  listLooksMeta,
+  recompressAllPhotos,
   saveSettings,
   updateLook,
   updateLookFeedback,
+  type StorageEstimate,
 } from './db'
 import {
   importBackupFile,
   shareOrDownloadBackup,
+  shareOrDownloadFullBackup,
   shouldRemindBackup,
   markBackupDone,
 } from './looks/backup'
@@ -37,11 +44,13 @@ import {
   verifyGithubBackup,
 } from './looks/githubBackup'
 import {
-  compressImage,
-  blobToObjectUrl,
   extractPhotoMeta,
+  formatBytes,
   getLookObjectUrl,
+  isQuotaExceededError,
+  prepareLookImages,
   pruneLookObjectUrls,
+  QUOTA_HINT,
   revokeLookObjectUrl,
 } from './looks/media'
 import { importLooksBatch } from './looks/importLook'
@@ -51,6 +60,7 @@ import {
   groupDayGroupsByMonth,
   groupLooksByDate,
   listMonthsFromLooks,
+  sortDayGroupsByFeelsLike,
 } from './looks/dayGroups'
 import {
   isThinAdvice,
@@ -153,7 +163,7 @@ function sourceLabel(source?: LocationSource) {
 function useLooks() {
   const [looks, setLooks] = useState<Look[]>([])
   const refresh = async () => {
-    const next = await listLooks()
+    const next = await listLooksMeta()
     pruneLookObjectUrls(new Set(next.map((l) => l.id)))
     setLooks(next)
   }
@@ -164,25 +174,36 @@ function useLooks() {
 }
 
 function Photo({
-  blob,
-  alt,
   lookId,
+  alt,
+  variant = 'thumb',
 }: {
-  blob: Blob
+  lookId: string
   alt: string
-  /** When set, object URL is cached by look id and not revoked on re-render. */
-  lookId?: string
+  /** Lists use thumb; large preview can request full. */
+  variant?: 'thumb' | 'full'
 }) {
-  const url = useMemo(() => {
-    if (lookId) return getLookObjectUrl(lookId, blob)
-    return blobToObjectUrl(blob)
-  }, [lookId, blob])
+  const [url, setUrl] = useState<string | null>(null)
 
   useEffect(() => {
-    if (lookId) return
-    return () => URL.revokeObjectURL(url)
-  }, [lookId, url])
+    let cancelled = false
+    setUrl(null)
+    void (async () => {
+      const blob =
+        variant === 'full'
+          ? await getLookFullBlob(lookId)
+          : await getLookThumbBlob(lookId)
+      if (cancelled || !blob) return
+      setUrl(getLookObjectUrl(lookId, blob, variant))
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [lookId, variant])
 
+  if (!url) {
+    return <div className="photo-skeleton" aria-hidden />
+  }
   return <img src={url} alt={alt} />
 }
 
@@ -392,7 +413,6 @@ function DayPhotoStrip({
       <div className="look-thumb">
         <Photo
           lookId={active.id}
-          blob={active.photoBlob}
           alt={`Лук ${active.date}${active.time ? ` ${active.time}` : ''}`}
         />
         {badge ? <span className="match-badge">{badge}</span> : null}
@@ -415,11 +435,7 @@ function DayPhotoStrip({
               data-favorite={look.favorite === true}
               onClick={() => onSelect(look.id)}
             >
-              <Photo
-                lookId={look.id}
-                blob={look.photoBlob}
-                alt=""
-              />
+              <Photo lookId={look.id} alt="" />
             </button>
           ))}
         </div>
@@ -856,9 +872,15 @@ function TodayScreen({
     const files = fileList ? Array.from(fileList) : []
     if (files.length === 0) return
     setBatchError(null)
+    if (await isStorageLow(Math.max(2 * 1024 * 1024, files.length * 150_000))) {
+      const ok = window.confirm(
+        'На устройстве мало места. Всё равно загрузить? Лучше сначала сжать старые фото в настройках.',
+      )
+      if (!ok) return
+    }
     setBatchProgress({ done: 0, total: files.length })
     try {
-      const { saved, failed } = await importLooksBatch(
+      const { saved, failed, quotaHit } = await importLooksBatch(
         files,
         settings,
         (done, total) => setBatchProgress({ done, total }),
@@ -867,7 +889,9 @@ function TodayScreen({
         scheduleAutoBackup('look')
         await onRefresh()
       }
-      if (failed > 0 && saved === 0) {
+      if (quotaHit) {
+        setBatchError(QUOTA_HINT)
+      } else if (failed > 0 && saved === 0) {
         setBatchError('Не удалось загрузить фото')
       } else if (failed > 0) {
         setBatchError(`загружено ${saved}, пропущено ${failed}`)
@@ -1116,7 +1140,7 @@ function TodayScreen({
           {needFeedback.slice(0, 2).map((look) => (
             <div key={look.id} className="nudge-look">
               <div className="nudge-look-thumb">
-                <Photo lookId={look.id} blob={look.photoBlob} alt="" />
+                <Photo lookId={look.id} alt="" />
               </div>
               <div className="nudge-look-body">
                 <p>{formatDateRu(look.date, look.time)}</p>
@@ -1256,7 +1280,7 @@ function AddLookScreen({
       }
 
       setStatus('сжимаю фото…')
-      const compressed = await compressImage(file)
+      const { blob: compressed } = await prepareLookImages(file)
       if (preview) URL.revokeObjectURL(preview)
       setBlob(compressed)
       setPreview(URL.createObjectURL(compressed))
@@ -1270,8 +1294,9 @@ function AddLookScreen({
               ? `сейчас · место с фото`
               : `сейчас · город из настроек · ${city}`,
       )
-    } catch {
-      setError('Не удалось обработать фото')
+    } catch (e) {
+      if (isQuotaExceededError(e)) setError(QUOTA_HINT)
+      else setError('Не удалось обработать фото')
       setStatus(null)
     }
   }
@@ -1284,9 +1309,18 @@ function AddLookScreen({
       return
     }
     setError(null)
+    if (await isStorageLow(Math.max(2 * 1024 * 1024, files.length * 150_000))) {
+      const ok = window.confirm(
+        'На устройстве мало места. Всё равно загрузить? Лучше сначала сжать старые фото в настройках.',
+      )
+      if (!ok) {
+        if (galleryRef.current) galleryRef.current.value = ''
+        return
+      }
+    }
     setBatchProgress({ done: 0, total: files.length })
     try {
-      const { saved, failed } = await importLooksBatch(
+      const { saved, failed, quotaHit } = await importLooksBatch(
         files,
         settings,
         (done, total) => setBatchProgress({ done, total }),
@@ -1297,10 +1331,14 @@ function AddLookScreen({
         return
       }
       setError(
-        failed > 0 ? 'Не удалось загрузить фото' : 'Не удалось сохранить',
+        quotaHit
+          ? QUOTA_HINT
+          : failed > 0
+            ? 'Не удалось загрузить фото'
+            : 'Не удалось сохранить',
       )
-    } catch {
-      setError('Не удалось загрузить фото')
+    } catch (e) {
+      setError(isQuotaExceededError(e) ? QUOTA_HINT : 'Не удалось загрузить фото')
     } finally {
       setBatchProgress(null)
       if (galleryRef.current) galleryRef.current.value = ''
@@ -1322,14 +1360,14 @@ function AddLookScreen({
         time: time || undefined,
         takenAt,
         note: note.trim() || undefined,
-        photoBlob: blob,
         weather,
         placeName: place.placeName,
         latitude: place.latitude,
         longitude: place.longitude,
         locationSource: place.source,
       }
-      await addLook(look)
+      const { blob: main, thumbBlob } = await prepareLookImages(blob)
+      await addLook(look, { blob: main, thumbBlob })
       scheduleAutoBackup('look')
       setNote('')
       setBlob(null)
@@ -1342,8 +1380,8 @@ function AddLookScreen({
       setStatus(null)
       setPendingNote('')
       setPendingFeedback(look)
-    } catch {
-      setError('Не удалось сохранить')
+    } catch (e) {
+      setError(isQuotaExceededError(e) ? QUOTA_HINT : 'Не удалось сохранить')
     } finally {
       setSaving(false)
     }
@@ -1370,11 +1408,7 @@ function AddLookScreen({
         <h2 className="block-title">в этой одежде было?</h2>
         <div className="form-stack">
           <div className="photo-drop corner has-photo">
-            <Photo
-              lookId={pendingFeedback.id}
-              blob={pendingFeedback.photoBlob}
-              alt="Сохранённый лук"
-            />
+            <Photo lookId={pendingFeedback.id} alt="Сохранённый лук" />
           </div>
           <p className="status">
             {formatDateRu(pendingFeedback.date, pendingFeedback.time)} ·{' '}
@@ -1547,6 +1581,8 @@ function ArchiveScreen({
   const [locError, setLocError] = useState<string | null>(null)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
   const [monthFilter, setMonthFilter] = useState<string | null>(null)
+  const [sortMode, setSortMode] = useState<'date' | 'temp'>('date')
+  const [tempDir, setTempDir] = useState<'asc' | 'desc'>('asc')
 
   const pool = useMemo(
     () => (favoritesOnly ? looks.filter((l) => l.favorite) : looks),
@@ -1567,13 +1603,20 @@ function ArchiveScreen({
         : pool,
     [pool, monthFilter],
   )
-  const dayGroups = useMemo(() => groupLooksByDate(filtered), [filtered])
+  const dayGroups = useMemo(() => {
+    const groups = groupLooksByDate(filtered)
+    if (sortMode === 'temp') {
+      return sortDayGroupsByFeelsLike(groups, tempDir)
+    }
+    return groups
+  }, [filtered, sortMode, tempDir])
   const monthSections = useMemo(
     () => groupDayGroupsByMonth(dayGroups),
     [dayGroups],
   )
   const hasFavorites = looks.some((l) => l.favorite)
   const showMonthNav = months.length > 1
+  const byTemp = sortMode === 'temp'
 
   async function applyPlace(look: Look, next: PlaceState) {
     setLocBusy(true)
@@ -1684,8 +1727,37 @@ function ArchiveScreen({
       <div className="section-kicker">архив</div>
       <h2 className="block-title">все луки</h2>
 
-      {(showMonthNav || hasFavorites) && looks.length > 0 && (
+      {(showMonthNav || hasFavorites || looks.length > 1) && looks.length > 0 && (
         <div className="archive-nav">
+          <div className="control-row filter-row archive-sort-row">
+            <button
+              type="button"
+              className="ghost-btn"
+              data-active={sortMode === 'date'}
+              onClick={() => setSortMode('date')}
+            >
+              дата
+            </button>
+            <button
+              type="button"
+              className="ghost-btn"
+              data-active={sortMode === 'temp'}
+              onClick={() => setSortMode('temp')}
+            >
+              температура
+            </button>
+            {byTemp ? (
+              <button
+                type="button"
+                className="ghost-btn"
+                onClick={() =>
+                  setTempDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+                }
+              >
+                {tempDir === 'asc' ? 'холод → тепло' : 'тепло → холод'}
+              </button>
+            ) : null}
+          </div>
           {showMonthNav && (
             <div className="archive-months" role="navigation" aria-label="месяцы">
               {monthFilter ? (
@@ -1745,26 +1817,44 @@ function ArchiveScreen({
 
       <div
         className="archive-list"
-        data-has-nav={showMonthNav || hasFavorites ? 'true' : 'false'}
+        data-has-nav={
+          showMonthNav || hasFavorites || looks.length > 1 ? 'true' : 'false'
+        }
       >
-        {monthSections.map(({ month, groups }) => (
-          <section key={month} className="archive-month-section">
-            <h3 className="archive-month-sticky">{formatMonthHeader(month)}</h3>
-            <div className="look-grid archive-grid">
-              {groups.map((group) => (
-                <DayLookCard
-                  key={group.date}
-                  group={group}
-                  badge={formatFeels(group.primary.weather.feelsLike)}
-                  onFeedback={onFeedback}
-                  onFeedbackNote={onFeedbackNote}
-                  onFavorite={onFavorite}
-                  actions={renderCardActions}
-                />
-              ))}
-            </div>
-          </section>
-        ))}
+        {byTemp ? (
+          <div className="look-grid archive-grid">
+            {dayGroups.map((group) => (
+              <DayLookCard
+                key={group.date}
+                group={group}
+                badge={formatFeels(group.primary.weather.feelsLike)}
+                onFeedback={onFeedback}
+                onFeedbackNote={onFeedbackNote}
+                onFavorite={onFavorite}
+                actions={renderCardActions}
+              />
+            ))}
+          </div>
+        ) : (
+          monthSections.map(({ month, groups }) => (
+            <section key={month} className="archive-month-section">
+              <h3 className="archive-month-sticky">{formatMonthHeader(month)}</h3>
+              <div className="look-grid archive-grid">
+                {groups.map((group) => (
+                  <DayLookCard
+                    key={group.date}
+                    group={group}
+                    badge={formatFeels(group.primary.weather.feelsLike)}
+                    onFeedback={onFeedback}
+                    onFeedbackNote={onFeedbackNote}
+                    onFavorite={onFavorite}
+                    actions={renderCardActions}
+                  />
+                ))}
+              </div>
+            </section>
+          ))
+        )}
       </div>
     </>
   )
@@ -1902,7 +1992,7 @@ function BackupPanel({
       await persistSettings(
         next,
         result.recompressed
-          ? 'копия сохранена (фото сжаты)'
+          ? 'копия сохранена (превью)'
           : 'копия сохранена',
       )
       setWizard(false)
@@ -1928,7 +2018,7 @@ function BackupPanel({
         githubBackupVerifiedAt: Date.now(),
       })
       setStatus(
-        result.recompressed ? 'сохранено · фото сжаты' : 'сохранено',
+        result.recompressed ? 'сохранено · превью' : 'сохранено',
       )
     } catch (e) {
       setError((e as Error).message)
@@ -2155,8 +2245,8 @@ function BackupPanel({
           {step === 3 && (
             <div className="backup-wizard-body">
               <p>
-                Сохрани первую копию луков. Дальше look. будет обновлять её
-                сам.
+                Сохрани первую копию: данные и превью фото (лёгкий файл). Полные
+                фото — отдельно в «файлы» → «полная копия».
               </p>
               <button
                 type="button"
@@ -2257,10 +2347,24 @@ function SettingsScreen({
   const [travelMode, setTravelMode] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [storage, setStorage] = useState<StorageEstimate | null>(null)
+  const [recompressing, setRecompressing] = useState(false)
+  const [recompressProgress, setRecompressProgress] = useState<{
+    done: number
+    total: number
+  } | null>(null)
 
   useEffect(() => {
     setPlace({ ...settings, source: 'settings' })
   }, [settings])
+
+  useEffect(() => {
+    void estimateStorage().then(setStorage)
+  }, [looksCount, recompressing])
+
+  async function refreshStorage() {
+    setStorage(await estimateStorage())
+  }
 
   async function persistHome(next: PlaceState) {
     setPlace(next)
@@ -2349,9 +2453,25 @@ function SettingsScreen({
       await shareOrDownloadBackup()
       const next = await markBackupDone(looksCount)
       onSettings(next)
-      setStatus('файл готов — сохрани в Файлы / iCloud')
+      setStatus('файл готов — превью и данные, для GitHub / повседневного')
     } catch {
       setError('Не удалось экспортировать')
+    }
+  }
+
+  async function exportFullBackup() {
+    setError(null)
+    const ok = window.confirm(
+      'Полная копия со всеми фото может быть большой и долгой. Продолжить?',
+    )
+    if (!ok) return
+    try {
+      await shareOrDownloadFullBackup()
+      const next = await markBackupDone(looksCount)
+      onSettings(next)
+      setStatus('полная копия готова — сохрани в Файлы / iCloud')
+    } catch {
+      setError('Не удалось экспортировать полную копию')
     }
   }
 
@@ -2370,11 +2490,43 @@ function SettingsScreen({
     }
   }
 
+  async function runRecompress() {
+    setError(null)
+    setRecompressing(true)
+    setRecompressProgress({ done: 0, total: 0 })
+    try {
+      const result = await recompressAllPhotos((done, total) =>
+        setRecompressProgress({ done, total }),
+      )
+      await refreshStorage()
+      setStatus(
+        result.failed > 0
+          ? `сжато ${result.done}, не вышло ${result.failed}`
+          : `сжато ${result.done} фото`,
+      )
+    } catch (e) {
+      setError(
+        isQuotaExceededError(e)
+          ? QUOTA_HINT
+          : 'Не удалось сжать фото',
+      )
+    } finally {
+      setRecompressing(false)
+      setRecompressProgress(null)
+    }
+  }
+
   const traveling = Boolean(settings.travelPlace)
   const homeLabel = formatPlaceShort(
     settings.homePlace?.placeName ??
       (traveling ? undefined : settings.placeName),
   )
+  const storageLabel =
+    storage && storage.quota > 0
+      ? `занято ${formatBytes(storage.usage)} из ${formatBytes(storage.quota)}`
+      : storage
+        ? `занято ${formatBytes(storage.usage)}`
+        : null
 
   return (
     <>
@@ -2445,7 +2597,35 @@ function SettingsScreen({
           autoError={autoError}
         />
 
+        <h3 className="settings-sub">память</h3>
+        {storageLabel ? (
+          <p className="meta-chip">{storageLabel}</p>
+        ) : (
+          <p className="field-hint">оценка места недоступна в этом браузере</p>
+        )}
+        <p className="field-hint">
+          В списках — маленькие превью. Полные фото подгружаются отдельно, чтобы
+          архив не забивал память.
+        </p>
+        <button
+          type="button"
+          className="ghost-btn"
+          disabled={recompressing || looksCount === 0}
+          onClick={() => void runRecompress()}
+        >
+          {recompressing
+            ? recompressProgress && recompressProgress.total > 0
+              ? `сжимаю… ${recompressProgress.done}/${recompressProgress.total}`
+              : 'сжимаю…'
+            : 'сжать старые фото'}
+        </button>
+
         <h3 className="settings-sub">файлы</h3>
+        <p className="field-hint">
+          Обычная копия и автосохранение на GitHub — данные и превью (легче,
+          без зависаний). Полная копия — все фото целиком; файл может быть
+          большим.
+        </p>
         <p className="field-hint">
           Импорт дополняет архив: локальные луки с другими id не пропадут.
         </p>
@@ -2455,6 +2635,13 @@ function SettingsScreen({
           onClick={() => void exportBackup()}
         >
           сохранить в файлы
+        </button>
+        <button
+          type="button"
+          className="ghost-btn"
+          onClick={() => void exportFullBackup()}
+        >
+          полная копия
         </button>
         <label className="file-btn">
           загрузить из файла

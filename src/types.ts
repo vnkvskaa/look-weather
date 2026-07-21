@@ -40,7 +40,7 @@ export function normalizeFeedback(raw: unknown): Feedback | undefined {
 
 export type LocationSource = 'photo' | 'settings' | 'search' | 'geo'
 
-/** Legacy wardrobe chips — kept for old backups / IndexedDB only. */
+/** Legacy wardrobe chips — kept for old backups / IndexedDB only; never shown in UI. */
 export type ItemTag = 'верх' | 'низ' | 'слой' | 'обувь' | 'другое'
 
 export type Place = {
@@ -60,6 +60,7 @@ export type WeatherProfile = {
   cloudCover: number
 }
 
+/** Look metadata — no photo bytes (those live in the `photos` table). */
 export type Look = {
   id: string
   createdAt: number
@@ -69,9 +70,8 @@ export type Look = {
   /** ISO-ish local timestamp from photo metadata */
   takenAt?: string
   note?: string
-  /** Legacy — no longer collected in UI; preserved on import */
+  /** Legacy — never collected in UI; preserved on import only */
   items?: ItemTag[]
-  photoBlob: Blob
   weather: WeatherProfile
   /** Where the look was worn — drives that look's weather snapshot */
   placeName: string
@@ -85,8 +85,17 @@ export type Look = {
   favorite?: boolean
 }
 
-export type LookExport = Omit<Look, 'photoBlob'> & {
+/** Photo row keyed by look id. */
+export type LookPhoto = {
+  lookId: string
+  blob: Blob
+  thumbBlob?: Blob
+}
+
+export type LookExport = Omit<Look, never> & {
   photoBase64: string
+  /** What was encoded — gist/auto use thumbs; full file export may use full. */
+  photoKind?: 'thumb' | 'full'
 }
 
 export type Settings = Place & {
