@@ -2259,15 +2259,15 @@ function BackupPanel({
                 открыть GitHub
               </a>
               <p>
-                Потом создай ключ для look. Нужен доступ к закрытым
-                репозиториям — на странице отметь право{' '}
-                <code>repo</code> (или fine-grained: Contents чтение и запись
-                на репозиторий копии). Сгенерируй ключ и сразу скопируй строку —
-                её показывают один раз.
+                Потом создай ключ (Classic) для look. На странице обязательно
+                отметь право <code>repo</code> — без него закрытая копия с
+                фото не сохранится. Одной галочки <code>gist</code> мало.
+                Сгенерируй ключ и сразу скопируй строку — её показывают один
+                раз.
               </p>
               <a
                 className="olive-btn backup-cta"
-                href="https://github.com/settings/tokens/new"
+                href="https://github.com/settings/tokens/new?scopes=repo&description=look"
                 target="_blank"
                 rel="noreferrer"
               >
@@ -2282,15 +2282,18 @@ function BackupPanel({
               </button>
               {detailsOpen ? (
                 <ul className="backup-hints">
+                  <li>
+                    Выбери Generate new token (classic), не fine-grained
+                  </li>
                   <li>Note — любое имя, например look</li>
                   <li>Expiration — без срока или длинный</li>
                   <li>
-                    Classic: галочка у <code>repo</code> (полный доступ к
-                    private repositories)
+                    Галочка у <code>repo</code> (полный доступ к private
+                    repositories). <code>gist</code> отдельно не нужен
                   </li>
                   <li>
-                    Fine-grained: Contents — Read and write на репозиторий
-                    look-weather-data
+                    Репозиторий look-weather-data создаст само приложение —
+                    вручную заводить не надо
                   </li>
                   <li>Скопируй строку ghp_… сразу</li>
                 </ul>
@@ -2341,9 +2344,10 @@ function BackupPanel({
           {step === 3 && (
             <div className="backup-wizard-body">
               <p>
-                Создадим закрытую папку на GitHub и зальём туда луки с фото.
-                Первый раз может занять время — фото идут по одному. Потом
-                дописываются только новые.
+                Создадим закрытый репозиторий{' '}
+                <code>look-weather-data</code> на твоём GitHub и зальём туда
+                луки со сжатыми фото. Первый раз может занять время — фото идут
+                по одному. Потом дописываются только новые.
               </p>
               {planLabel ? <p className="meta-chip">{planLabel}</p> : null}
               {progress ? <p className="status">{progress}</p> : null}
@@ -2422,8 +2426,8 @@ function BackupPanel({
       <p className="field-hint">
         Ключ храни только на телефоне. На новом устройстве: вставь тот же ключ →
         восстановить. Если локальное фото уже есть, оно не затирается. Старую
-        облачную копию ещё можно открыть один раз; новые сохранения идут в
-        закрытый репозиторий с фото.
+        копию без фото (gist) ещё можно открыть один раз; новые сохранения идут
+        в закрытый репозиторий look-weather-data с фото.
       </p>
     </div>
   )
