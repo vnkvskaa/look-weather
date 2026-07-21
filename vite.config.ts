@@ -44,6 +44,14 @@ export default defineConfig({
               expiration: { maxEntries: 64, maxAgeSeconds: 60 * 60 },
             },
           },
+          {
+            urlPattern: /^https:\/\/api\.bigdatacloud\.net\/.*/i,
+            handler: 'StaleWhileRevalidate',
+            options: {
+              cacheName: 'reverse-geo',
+              expiration: { maxEntries: 64, maxAgeSeconds: 60 * 60 * 24 },
+            },
+          },
         ],
       },
     }),

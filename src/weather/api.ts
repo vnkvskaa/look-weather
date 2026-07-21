@@ -140,6 +140,41 @@ export async function searchPlaces(query: string) {
   }))
 }
 
+/** Resolve a human place name for coordinates (photo GPS / device geo). */
+export async function reverseGeocode(
+  latitude: number,
+  longitude: number,
+): Promise<{ name: string; latitude: number; longitude: number }> {
+  const url = new URL(
+    'https://api.bigdatacloud.net/data/reverse-geocode-client',
+  )
+  url.searchParams.set('latitude', String(latitude))
+  url.searchParams.set('longitude', String(longitude))
+  url.searchParams.set('localityLanguage', 'ru')
+  const res = await fetch(url)
+  if (!res.ok) throw new Error('Не удалось определить место')
+  const data = (await res.json()) as {
+    city?: string
+    locality?: string
+    principalSubdivision?: string
+    countryName?: string
+  }
+  const name = [
+    data.city || data.locality,
+    data.principalSubdivision && data.principalSubdivision !== data.city
+      ? data.principalSubdivision
+      : null,
+    data.countryName,
+  ]
+    .filter(Boolean)
+    .join(', ')
+  return {
+    name: name || `${latitude.toFixed(2)}, ${longitude.toFixed(2)}`,
+    latitude,
+    longitude,
+  }
+}
+
 export async function fetchWeatherForDate(
   latitude: number,
   longitude: number,

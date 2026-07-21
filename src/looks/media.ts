@@ -7,6 +7,15 @@ export type PhotoTakenAt = {
   source: 'exif' | 'file' | 'now'
 }
 
+export type PhotoGps = {
+  latitude: number
+  longitude: number
+}
+
+export type PhotoMeta = PhotoTakenAt & {
+  gps?: PhotoGps
+}
+
 function pad(n: number) {
   return String(n).padStart(2, '0')
 }
@@ -22,8 +31,7 @@ function fromDate(d: Date, source: PhotoTakenAt['source']): PhotoTakenAt {
   }
 }
 
-/** Read capture date/time from EXIF; fall back to file mtime, then now. */
-export async function extractPhotoTakenAt(file: File): Promise<PhotoTakenAt> {
+async function extractTakenAt(file: File): Promise<PhotoTakenAt> {
   try {
     const tags = await exifr.parse(file, {
       pick: [
@@ -42,7 +50,7 @@ export async function extractPhotoTakenAt(file: File): Promise<PhotoTakenAt> {
       return fromDate(raw, 'exif')
     }
   } catch {
-    // ignore and fall through
+    // fall through
   }
 
   if (file.lastModified) {
@@ -50,6 +58,41 @@ export async function extractPhotoTakenAt(file: File): Promise<PhotoTakenAt> {
   }
 
   return fromDate(new Date(), 'now')
+}
+
+async function extractGps(file: File): Promise<PhotoGps | undefined> {
+  try {
+    const gps = await exifr.gps(file)
+    if (
+      gps &&
+      typeof gps.latitude === 'number' &&
+      typeof gps.longitude === 'number' &&
+      Number.isFinite(gps.latitude) &&
+      Number.isFinite(gps.longitude)
+    ) {
+      return {
+        latitude: gps.latitude,
+        longitude: gps.longitude,
+      }
+    }
+  } catch {
+    // no GPS in file
+  }
+  return undefined
+}
+
+/** Read capture date/time + optional GPS from EXIF. */
+export async function extractPhotoMeta(file: File): Promise<PhotoMeta> {
+  const [taken, gps] = await Promise.all([
+    extractTakenAt(file),
+    extractGps(file),
+  ])
+  return { ...taken, gps }
+}
+
+/** @deprecated use extractPhotoMeta */
+export async function extractPhotoTakenAt(file: File): Promise<PhotoTakenAt> {
+  return extractTakenAt(file)
 }
 
 export async function compressImage(

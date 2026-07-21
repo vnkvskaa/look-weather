@@ -35,19 +35,19 @@ export function rankLooks(
       tempDiff * 1.6 + windDiff * 0.7 + humidDiff + cloudDiff + precip
 
     const reasonBits: string[] = []
-    reasonBits.push(
-      `теплота ~${Math.round(warmth)}° (день лука ${Math.round(look.weather.feelsLike)}°)`,
-    )
-    if (look.feedback === 'too_cold') reasonBits.push('учитываю: было холодно')
-    if (look.feedback === 'too_hot') reasonBits.push('учитываю: было жарко')
+    reasonBits.push(`теплота ~${Math.round(warmth)}°`)
+    if (look.feedback === 'too_cold') reasonBits.push('в тот день было холодно')
+    if (look.feedback === 'too_hot') reasonBits.push('в тот день было жарко')
     if (precip > 0) {
       reasonBits.push(
         target.precipMm >= 1 || target.precipProb >= 50
-          ? 'в целевой день сыро — лук был в сухой день'
-          : 'лук был в дождь — сегодня суше',
+          ? 'сейчас сыро — лук был в сухой день'
+          : 'лук был в дождь — сейчас суше',
       )
     } else if (look.weather.windMs >= 4.5 && target.windMs >= 4.5) {
       reasonBits.push('похожий ветер')
+    } else {
+      reasonBits.push(`день лука ${Math.round(look.weather.feelsLike)}°`)
     }
 
     return {

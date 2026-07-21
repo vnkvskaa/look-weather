@@ -1,5 +1,13 @@
 export type Feedback = 'too_cold' | 'ok' | 'too_hot'
 
+export type LocationSource = 'photo' | 'settings' | 'search' | 'geo'
+
+export type Place = {
+  placeName: string
+  latitude: number
+  longitude: number
+}
+
 export type WeatherProfile = {
   date: string
   feelsLike: number
@@ -22,6 +30,11 @@ export type Look = {
   note?: string
   photoBlob: Blob
   weather: WeatherProfile
+  /** Where the look was worn — drives that look's weather snapshot */
+  placeName: string
+  latitude: number
+  longitude: number
+  locationSource?: LocationSource
   feedback?: Feedback
   feedbackNote?: string
 }
@@ -30,11 +43,7 @@ export type LookExport = Omit<Look, 'photoBlob'> & {
   photoBase64: string
 }
 
-export type Settings = {
-  placeName: string
-  latitude: number
-  longitude: number
-}
+export type Settings = Place
 
 export type Tab = 'today' | 'add' | 'archive' | 'settings'
 

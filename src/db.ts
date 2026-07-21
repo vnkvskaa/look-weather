@@ -33,7 +33,15 @@ export async function saveSettings(settings: Settings): Promise<void> {
 }
 
 export async function listLooks(): Promise<Look[]> {
-  return db.looks.orderBy('date').reverse().toArray()
+  const rows = await db.looks.orderBy('date').reverse().toArray()
+  const settings = await getSettings()
+  return rows.map((look) => ({
+    ...look,
+    placeName: look.placeName || settings.placeName,
+    latitude: look.latitude ?? settings.latitude,
+    longitude: look.longitude ?? settings.longitude,
+    locationSource: look.locationSource ?? 'settings',
+  }))
 }
 
 export async function addLook(look: Look): Promise<void> {
@@ -46,6 +54,13 @@ export async function updateLookFeedback(
   feedbackNote?: string,
 ): Promise<void> {
   await db.looks.update(id, { feedback, feedbackNote })
+}
+
+export async function updateLook(
+  id: string,
+  patch: Partial<Omit<Look, 'id' | 'photoBlob'>>,
+): Promise<void> {
+  await db.looks.update(id, patch)
 }
 
 export async function deleteLook(id: string): Promise<void> {

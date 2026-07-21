@@ -1,19 +1,33 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   addLook,
   deleteLook,
   getSettings,
   listLooks,
   saveSettings,
+  updateLook,
   updateLookFeedback,
 } from './db'
 import { importBackupFile, shareOrDownloadBackup } from './looks/backup'
-import { compressImage, blobToObjectUrl, extractPhotoTakenAt } from './looks/media'
+import {
+  compressImage,
+  blobToObjectUrl,
+  extractPhotoMeta,
+} from './looks/media'
 import { rankLooks } from './looks/recommend'
-import type { Feedback, Look, Settings, Tab, WeatherProfile } from './types'
+import type {
+  Feedback,
+  LocationSource,
+  Look,
+  Place,
+  Settings,
+  Tab,
+  WeatherProfile,
+} from './types'
 import {
   fetchWeatherForDate,
   formatFeels,
+  reverseGeocode,
   searchPlaces,
   weatherLabel,
 } from './weather/api'
@@ -34,6 +48,30 @@ function formatDateRu(iso: string, time?: string) {
   return time ? `${day}, ${time}` : day
 }
 
+function formatPickerDate(iso: string) {
+  const d = new Date(iso + 'T12:00:00')
+  return d.toLocaleDateString('ru-RU', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  })
+}
+
+function sourceLabel(source?: LocationSource) {
+  switch (source) {
+    case 'photo':
+      return 'место с фото'
+    case 'geo':
+      return 'геолокация'
+    case 'search':
+      return 'поиск'
+    case 'settings':
+      return 'из настроек'
+    default:
+      return 'место'
+  }
+}
+
 function useLooks() {
   const [looks, setLooks] = useState<Look[]>([])
   const refresh = async () => setLooks(await listLooks())
@@ -52,6 +90,54 @@ function Photo({ blob, alt }: { blob: Blob; alt: string }) {
   }, [blob])
   if (!url) return null
   return <img src={url} alt={alt} />
+}
+
+function DatePicker({
+  value,
+  onChange,
+  hint = 'дата',
+}: {
+  value: string
+  onChange: (v: string) => void
+  hint?: string
+}) {
+  const id = useId()
+  return (
+    <label className="picker" htmlFor={id}>
+      <span className="picker-value">{formatPickerDate(value)}</span>
+      <span className="picker-hint">{hint}</span>
+      <input
+        id={id}
+        type="date"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  )
+}
+
+function TimePicker({
+  value,
+  onChange,
+  hint = 'время',
+}: {
+  value: string
+  onChange: (v: string) => void
+  hint?: string
+}) {
+  const id = useId()
+  return (
+    <label className="picker" htmlFor={id}>
+      <span className="picker-value">{value || '—:—'}</span>
+      <span className="picker-hint">{hint}</span>
+      <input
+        id={id}
+        type="time"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  )
 }
 
 function FeedbackBar({
@@ -82,14 +168,186 @@ function FeedbackBar({
   )
 }
 
+type PlaceState = Place & { source: LocationSource }
+
+function LocationEditor({
+  place,
+  onChange,
+  compact = false,
+}: {
+  place: PlaceState
+  onChange: (next: PlaceState) => void
+  compact?: boolean
+}) {
+  const [editing, setEditing] = useState(false)
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<
+    Array<{ name: string; latitude: number; longitude: number }>
+  >([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function runSearch() {
+    setError(null)
+    if (!query.trim()) {
+      setError('Введи название города')
+      return
+    }
+    setBusy(true)
+    try {
+      const found = await searchPlaces(query.trim())
+      setResults(found)
+      if (found.length === 0) setError('Ничего не найдено')
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function useGeo() {
+    setError(null)
+    if (!navigator.geolocation) {
+      setError('Геолокация недоступна')
+      return
+    }
+    setBusy(true)
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const resolved = await reverseGeocode(
+            pos.coords.latitude,
+            pos.coords.longitude,
+          )
+          onChange({
+            placeName: resolved.name,
+            latitude: resolved.latitude,
+            longitude: resolved.longitude,
+            source: 'geo',
+          })
+          setEditing(true)
+          setQuery(resolved.name.split(',')[0] ?? resolved.name)
+          setResults([])
+        } catch (e) {
+          setError((e as Error).message)
+        } finally {
+          setBusy(false)
+        }
+      },
+      () => {
+        setBusy(false)
+        setError('Не удалось получить геолокацию — лучше найди город')
+        setEditing(true)
+      },
+      { enableHighAccuracy: false, timeout: 12000 },
+    )
+  }
+
+  return (
+    <div className="place-card corner">
+      <p className="place-card-label">{sourceLabel(place.source)}</p>
+      <p className="place-card-name">{place.placeName}</p>
+      {!editing ? (
+        <div className="place-card-actions">
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={() => {
+              setEditing(true)
+              setQuery(place.placeName.split(',')[0] ?? place.placeName)
+              setResults([])
+              setError(null)
+            }}
+          >
+            это неверно
+          </button>
+          {!compact && (
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={() => void useGeo()}
+              disabled={busy}
+            >
+              {busy ? '…' : 'гео'}
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="place-search">
+          <p className="status">Найди город вручную — так точнее, чем GPS.</p>
+          <div className="field">
+            <label htmlFor={`place-q-${place.latitude}`}>город</label>
+            <input
+              id={`place-q-${place.latitude}`}
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void runSearch()
+              }}
+              placeholder="Москва, Стамбул…"
+              autoComplete="address-level2"
+            />
+          </div>
+          <div className="place-card-actions">
+            <button
+              type="button"
+              className="olive-btn"
+              onClick={() => void runSearch()}
+              disabled={busy}
+            >
+              {busy ? 'ищу…' : 'найти'}
+            </button>
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={() => {
+                setEditing(false)
+                setResults([])
+                setError(null)
+              }}
+            >
+              отмена
+            </button>
+          </div>
+          <div className="search-list">
+            {results.map((r) => (
+              <button
+                key={`${r.latitude}-${r.longitude}`}
+                type="button"
+                onClick={() => {
+                  onChange({
+                    placeName: r.name,
+                    latitude: r.latitude,
+                    longitude: r.longitude,
+                    source: 'search',
+                  })
+                  setEditing(false)
+                  setResults([])
+                  setError(null)
+                }}
+              >
+                {r.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {error && <p className="error">{error}</p>}
+    </div>
+  )
+}
+
 function TodayScreen({
   looks,
   settings,
   onFeedback,
+  onAdd,
 }: {
   looks: Look[]
   settings: Settings
   onFeedback: (id: string, f: Feedback) => void
+  onAdd: () => void
 }) {
   const [date, setDate] = useState(todayISO)
   const [weather, setWeather] = useState<WeatherProfile | null>(null)
@@ -122,13 +380,9 @@ function TodayScreen({
 
   return (
     <>
-      <div className="section-kicker">atmosphere</div>
-      <div className="date-row">
-        <input
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-        />
+      <div className="section-kicker">атмосфера</div>
+      <div className="control-row">
+        <DatePicker value={date} onChange={setDate} />
         <button
           type="button"
           className="ghost-btn"
@@ -148,7 +402,7 @@ function TodayScreen({
           <div className="hero-temp">
             <div className="deg">{formatFeels(weather.feelsLike)}</div>
             <div className="side">
-              feels like
+              ощущается
               <br />
               {settings.placeName}
               <br />
@@ -179,12 +433,14 @@ function TodayScreen({
 
       <h2 className="block-title">что надеть</h2>
       {looks.length === 0 && (
-        <p className="empty">
-          Пока нет луков. Добавь первый — и рекомендации появятся сами.
-        </p>
-      )}
-      {looks.length > 0 && ranked.length === 0 && weather && (
-        <p className="empty">Недостаточно данных для ранжирования.</p>
+        <div className="empty-actions">
+          <p className="empty">
+            Пока нет луков. Добавь первый — и рекомендации появятся сами.
+          </p>
+          <button type="button" className="olive-btn" onClick={onAdd}>
+            добавить лук
+          </button>
+        </div>
       )}
       <div className="look-list">
         {ranked.map(({ look, reason, effectiveWarmth }, i) => (
@@ -199,7 +455,10 @@ function TodayScreen({
             <div className="look-meta">
               <div>
                 <h3>{formatDateRu(look.date, look.time)}</h3>
-                <p>{reason}</p>
+                <p>
+                  {look.placeName ? `${look.placeName} · ` : ''}
+                  {reason}
+                </p>
               </div>
               <span className="badge">~{Math.round(effectiveWarmth)}°</span>
             </div>
@@ -221,12 +480,17 @@ function AddLookScreen({
   settings: Settings
   onSaved: () => void
 }) {
+  const galleryRef = useRef<HTMLInputElement>(null)
   const [date, setDate] = useState(todayISO)
   const [time, setTime] = useState('')
   const [takenAt, setTakenAt] = useState<string | undefined>()
   const [metaSource, setMetaSource] = useState<
     'exif' | 'file' | 'now' | null
   >(null)
+  const [place, setPlace] = useState<PlaceState>({
+    ...settings,
+    source: 'settings',
+  })
   const [note, setNote] = useState('')
   const [preview, setPreview] = useState<string | null>(null)
   const [blob, setBlob] = useState<Blob | null>(null)
@@ -238,13 +502,16 @@ function AddLookScreen({
   useEffect(() => {
     let cancelled = false
     fetchWeatherForDate(
-      settings.latitude,
-      settings.longitude,
+      place.latitude,
+      place.longitude,
       date,
       time || undefined,
     )
       .then((w) => {
-        if (!cancelled) setWeather(w)
+        if (!cancelled) {
+          setWeather(w)
+          setError(null)
+        }
       })
       .catch((e: Error) => {
         if (!cancelled) setError(e.message)
@@ -252,7 +519,7 @@ function AddLookScreen({
     return () => {
       cancelled = true
     }
-  }, [date, time, settings.latitude, settings.longitude])
+  }, [date, time, place.latitude, place.longitude])
 
   useEffect(() => {
     return () => {
@@ -265,11 +532,36 @@ function AddLookScreen({
     setError(null)
     setStatus('читаю метаданные…')
     try {
-      const meta = await extractPhotoTakenAt(file)
+      const meta = await extractPhotoMeta(file)
       setDate(meta.date)
       setTime(meta.time)
       setTakenAt(meta.takenAt)
       setMetaSource(meta.source)
+
+      if (meta.gps) {
+        setStatus('определяю место по фото…')
+        try {
+          const resolved = await reverseGeocode(
+            meta.gps.latitude,
+            meta.gps.longitude,
+          )
+          setPlace({
+            placeName: resolved.name,
+            latitude: resolved.latitude,
+            longitude: resolved.longitude,
+            source: 'photo',
+          })
+        } catch {
+          setPlace({
+            placeName: `${meta.gps.latitude.toFixed(2)}, ${meta.gps.longitude.toFixed(2)}`,
+            latitude: meta.gps.latitude,
+            longitude: meta.gps.longitude,
+            source: 'photo',
+          })
+        }
+      } else {
+        setPlace({ ...settings, source: 'settings' })
+      }
 
       setStatus('сжимаю фото…')
       const compressed = await compressImage(file)
@@ -278,9 +570,9 @@ function AddLookScreen({
       setPreview(URL.createObjectURL(compressed))
       setStatus(
         meta.source === 'exif'
-          ? `дата с фото: ${meta.date} ${meta.time}`
+          ? `снято ${formatDateRu(meta.date, meta.time)}`
           : meta.source === 'file'
-            ? `дата файла: ${meta.date} ${meta.time} (EXIF не найден)`
+            ? `дата файла ${formatDateRu(meta.date, meta.time)}`
             : null,
       )
     } catch {
@@ -291,7 +583,7 @@ function AddLookScreen({
 
   async function save() {
     if (!blob || !weather) {
-      setError('Нужны фото и погода')
+      setError('Сначала добавь фото')
       return
     }
     setSaving(true)
@@ -306,6 +598,10 @@ function AddLookScreen({
         note: note.trim() || undefined,
         photoBlob: blob,
         weather,
+        placeName: place.placeName,
+        latitude: place.latitude,
+        longitude: place.longitude,
+        locationSource: place.source,
       }
       await addLook(look)
       setNote('')
@@ -313,9 +609,10 @@ function AddLookScreen({
       setTime('')
       setTakenAt(undefined)
       setMetaSource(null)
+      setPlace({ ...settings, source: 'settings' })
       if (preview) URL.revokeObjectURL(preview)
       setPreview(null)
-      setStatus('сохранено')
+      setStatus(null)
       onSaved()
     } catch {
       setError('Не удалось сохранить')
@@ -324,17 +621,29 @@ function AddLookScreen({
     }
   }
 
+  const metaHint =
+    metaSource === 'exif'
+      ? 'из фото'
+      : metaSource === 'file'
+        ? 'из файла'
+        : 'правка'
+
   return (
     <>
-      <div className="section-kicker">log look</div>
-      <h2 className="block-title">лук дня</h2>
+      <div className="section-kicker">новый лук</div>
+      <h2 className="block-title">записать образ</h2>
       <div className="form-stack">
-        <div
+        <button
+          type="button"
           className={`photo-drop corner ${preview ? 'has-photo' : ''}`}
+          onClick={() => galleryRef.current?.click()}
         >
           {preview && <img src={preview} alt="Превью лука" />}
-          <div className="hint">фото образа</div>
-        </div>
+          <div className="hint">
+            фото образа
+            <small>дата и место — из снимка, если есть</small>
+          </div>
+        </button>
         <div className="photo-actions">
           <label>
             камера
@@ -348,54 +657,43 @@ function AddLookScreen({
           <label>
             галерея
             <input
+              ref={galleryRef}
               type="file"
               accept="image/*"
               onChange={(e) => void onFile(e.target.files?.[0])}
             />
           </label>
         </div>
-        <div className="field">
-          <label htmlFor="look-date">
-            дата
-            {metaSource === 'exif'
-              ? ' · из фото'
-              : metaSource === 'file'
-                ? ' · из файла'
-                : ''}
-          </label>
-          <input
-            id="look-date"
-            type="date"
-            value={date}
-            onChange={(e) => {
-              setDate(e.target.value)
-              setMetaSource(null)
-            }}
-          />
+        <div className="field-row">
+          <div className="field">
+            <label>дата · {metaHint}</label>
+            <DatePicker
+              value={date}
+              hint={metaHint}
+              onChange={(v) => {
+                setDate(v)
+                setMetaSource(null)
+              }}
+            />
+          </div>
+          <div className="field">
+            <label>время · {metaHint}</label>
+            <TimePicker
+              value={time}
+              hint={metaHint}
+              onChange={(v) => {
+                setTime(v)
+                setMetaSource(null)
+              }}
+            />
+          </div>
         </div>
-        <div className="field">
-          <label htmlFor="look-time">
-            время
-            {metaSource === 'exif'
-              ? ' · из фото'
-              : metaSource === 'file'
-                ? ' · из файла'
-                : ''}
-          </label>
-          <input
-            id="look-time"
-            type="time"
-            value={time}
-            onChange={(e) => {
-              setTime(e.target.value)
-              setMetaSource(null)
-            }}
-          />
-        </div>
+        <LocationEditor place={place} onChange={setPlace} />
         {weather && (
           <p className="status">
-            погода{time ? ` в ${time}` : ' дня'}: {weatherLabel(weather)} ·
-            ветер {weather.windMs} м/с · влажн. {weather.humidity}%
+            погода{time ? ` в ${time}` : ''} · {place.placeName}:{' '}
+            {weatherLabel(weather)} · ветер {weather.windMs} м/с · влажн.{' '}
+            {weather.humidity}%
           </p>
         )}
         <div className="field">
@@ -412,7 +710,7 @@ function AddLookScreen({
         <button
           type="button"
           className="olive-btn"
-          disabled={saving}
+          disabled={saving || !blob}
           onClick={() => void save()}
         >
           {saving ? 'сохраняю…' : 'сохранить лук'}
@@ -424,51 +722,155 @@ function AddLookScreen({
 
 function ArchiveScreen({
   looks,
+  settings,
   onFeedback,
   onDelete,
+  onUpdated,
+  onAdd,
 }: {
   looks: Look[]
+  settings: Settings
   onFeedback: (id: string, f: Feedback) => void
   onDelete: (id: string) => void
+  onUpdated: () => void
+  onAdd: () => void
 }) {
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [locBusy, setLocBusy] = useState(false)
+  const [locError, setLocError] = useState<string | null>(null)
+
+  async function applyPlace(look: Look, next: PlaceState) {
+    setLocBusy(true)
+    setLocError(null)
+    try {
+      const weather = await fetchWeatherForDate(
+        next.latitude,
+        next.longitude,
+        look.date,
+        look.time,
+      )
+      await updateLook(look.id, {
+        placeName: next.placeName,
+        latitude: next.latitude,
+        longitude: next.longitude,
+        locationSource: next.source,
+        weather,
+      })
+      setEditingId(null)
+      onUpdated()
+    } catch (e) {
+      setLocError((e as Error).message)
+    } finally {
+      setLocBusy(false)
+    }
+  }
+
   return (
     <>
-      <div className="section-kicker">archive</div>
+      <div className="section-kicker">архив</div>
       <h2 className="block-title">все луки</h2>
       {looks.length === 0 && (
-        <p className="empty">Архив пуст — начни с сегодняшнего образа.</p>
+        <div className="empty-actions">
+          <p className="empty">Архив пуст — начни с сегодняшнего образа.</p>
+          <button type="button" className="olive-btn" onClick={onAdd}>
+            добавить лук
+          </button>
+        </div>
       )}
       <div className="look-list">
-        {looks.map((look) => (
-          <article key={look.id} className="look-item">
-            <div className="look-frame">
-              <Photo blob={look.photoBlob} alt={`Лук ${look.date}`} />
-            </div>
-            <div className="look-meta">
-              <div>
-                <h3>{formatDateRu(look.date, look.time)}</h3>
-                <p>
-                  {weatherLabel(look.weather)}
-                  {look.note ? ` · ${look.note}` : ''}
-                </p>
+        {looks.map((look) => {
+          const place: PlaceState = {
+            placeName: look.placeName || settings.placeName,
+            latitude: look.latitude ?? settings.latitude,
+            longitude: look.longitude ?? settings.longitude,
+            source: look.locationSource ?? 'settings',
+          }
+          return (
+            <article key={look.id} className="look-item">
+              <div className="look-frame">
+                <Photo blob={look.photoBlob} alt={`Лук ${look.date}`} />
               </div>
-              <span className="badge">
-                {formatFeels(look.weather.feelsLike)}
-              </span>
-            </div>
-            <FeedbackBar
-              value={look.feedback}
-              onChange={(f) => onFeedback(look.id, f)}
-            />
-            <button
-              type="button"
-              className="ghost-btn"
-              onClick={() => onDelete(look.id)}
-            >
-              удалить
-            </button>
-          </article>
-        ))}
+              <div className="look-meta">
+                <div>
+                  <h3>{formatDateRu(look.date, look.time)}</h3>
+                  <p>
+                    {place.placeName} · {weatherLabel(look.weather)}
+                    {look.note ? ` · ${look.note}` : ''}
+                  </p>
+                </div>
+                <span className="badge">
+                  {formatFeels(look.weather.feelsLike)}
+                </span>
+              </div>
+              <FeedbackBar
+                value={look.feedback}
+                onChange={(f) => onFeedback(look.id, f)}
+              />
+              {editingId === look.id ? (
+                <>
+                  <LocationEditor
+                    place={place}
+                    compact
+                    onChange={(next) => void applyPlace(look, next)}
+                  />
+                  {locBusy && (
+                    <p className="status loading-pulse">обновляю погоду…</p>
+                  )}
+                  {locError && <p className="error">{locError}</p>}
+                  <button
+                    type="button"
+                    className="text-btn"
+                    onClick={() => setEditingId(null)}
+                  >
+                    закрыть место
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="text-btn"
+                  onClick={() => {
+                    setEditingId(look.id)
+                    setLocError(null)
+                  }}
+                >
+                  изменить место
+                </button>
+              )}
+              {pendingDelete === look.id ? (
+                <div className="confirm-bar">
+                  <p>удалить этот лук?</p>
+                  <button
+                    type="button"
+                    className="ghost-btn"
+                    onClick={() => setPendingDelete(null)}
+                  >
+                    отмена
+                  </button>
+                  <button
+                    type="button"
+                    className="solid-btn"
+                    onClick={() => {
+                      onDelete(look.id)
+                      setPendingDelete(null)
+                    }}
+                  >
+                    удалить
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="text-btn"
+                  onClick={() => setPendingDelete(look.id)}
+                >
+                  удалить
+                </button>
+              )}
+            </article>
+          )
+        })}
       </div>
     </>
   )
@@ -481,44 +883,28 @@ function SettingsScreen({
   settings: Settings
   onSettings: (s: Settings) => void
 }) {
-  const [query, setQuery] = useState(settings.placeName)
-  const [results, setResults] = useState<
-    Array<{ name: string; latitude: number; longitude: number }>
-  >([])
+  const [place, setPlace] = useState<PlaceState>({
+    ...settings,
+    source: 'settings',
+  })
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  async function runSearch() {
-    setError(null)
-    try {
-      const found = await searchPlaces(query.trim())
-      setResults(found)
-      if (found.length === 0) setStatus('ничего не найдено')
-      else setStatus(null)
-    } catch (e) {
-      setError((e as Error).message)
-    }
-  }
+  useEffect(() => {
+    setPlace({ ...settings, source: 'settings' })
+  }, [settings])
 
-  async function useGeo() {
-    setError(null)
-    if (!navigator.geolocation) {
-      setError('Геолокация недоступна')
-      return
+  async function persist(next: PlaceState) {
+    setPlace(next)
+    const saved: Settings = {
+      placeName: next.placeName,
+      latitude: next.latitude,
+      longitude: next.longitude,
     }
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const next: Settings = {
-          placeName: 'здесь',
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-        }
-        await saveSettings(next)
-        onSettings(next)
-        setStatus('локация обновлена')
-      },
-      () => setError('Не удалось получить геолокацию'),
-    )
+    await saveSettings(saved)
+    onSettings(saved)
+    setStatus(`город: ${next.placeName}`)
+    setError(null)
   }
 
   async function exportBackup() {
@@ -545,65 +931,33 @@ function SettingsScreen({
 
   return (
     <>
-      <div className="section-kicker">settings</div>
+      <div className="section-kicker">настройки</div>
       <h2 className="block-title">город и бэкап</h2>
       <div className="settings-stack">
         <p>
-          Данные живут на этом телефоне. Для переноса — экспорт в Файлы → iCloud
-          Drive, потом импорт.
+          Город по умолчанию — для «сегодня» и луков без GPS. Если геолокация
+          ошиблась — нажми «это неверно» и найди город вручную.
         </p>
-        <div className="field">
-          <label htmlFor="city">город</label>
-          <input
-            id="city"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Москва"
-          />
-        </div>
-        <div className="photo-actions">
-          <button type="button" onClick={() => void runSearch()}>
-            найти
-          </button>
-          <button type="button" onClick={() => void useGeo()}>
-            геолокация
-          </button>
-        </div>
-        <div className="search-list">
-          {results.map((r) => (
-            <button
-              key={`${r.latitude}-${r.longitude}`}
-              type="button"
-              onClick={() => {
-                const next = {
-                  placeName: r.name,
-                  latitude: r.latitude,
-                  longitude: r.longitude,
-                }
-                void saveSettings(next).then(() => {
-                  onSettings(next)
-                  setStatus(`город: ${r.name}`)
-                  setResults([])
-                })
-              }}
-            >
-              {r.name}
-            </button>
-          ))}
-        </div>
+        <LocationEditor
+          place={place}
+          onChange={(next) => void persist(next)}
+        />
         <p className="meta-chip">
-          now · {settings.placeName} · {settings.latitude.toFixed(2)},{' '}
+          сейчас · {settings.placeName} · {settings.latitude.toFixed(2)},{' '}
           {settings.longitude.toFixed(2)}
         </p>
-        <button type="button" className="solid-btn" onClick={() => void exportBackup()}>
-          экспорт в файлы / share
+        <button
+          type="button"
+          className="solid-btn"
+          onClick={() => void exportBackup()}
+        >
+          экспорт в файлы
         </button>
-        <label className="ghost-btn" style={{ display: 'grid' }}>
+        <label className="file-btn">
           импорт бэкапа
           <input
             type="file"
             accept="application/json,.json"
-            hidden
             onChange={(e) => void onImport(e.target.files?.[0])}
           />
         </label>
@@ -629,7 +983,6 @@ export default function App() {
   }
 
   async function onDelete(id: string) {
-    if (!confirm('Удалить этот лук?')) return
     await deleteLook(id)
     await refresh()
   }
@@ -639,7 +992,10 @@ export default function App() {
       <div className="app">
         <div className="dot-grid" />
         <div className="shell">
-          <p className="status loading-pulse">look.</p>
+          <div className="brand">
+            look<span>.</span>
+          </div>
+          <p className="status loading-pulse">загрузка…</p>
         </div>
       </div>
     )
@@ -661,6 +1017,7 @@ export default function App() {
             looks={looks}
             settings={settings}
             onFeedback={onFeedback}
+            onAdd={() => setTab('add')}
           />
         )}
         {tab === 'add' && (
@@ -668,15 +1025,18 @@ export default function App() {
             settings={settings}
             onSaved={() => {
               void refresh()
-              setTab('archive')
+              setTab('today')
             }}
           />
         )}
         {tab === 'archive' && (
           <ArchiveScreen
             looks={looks}
+            settings={settings}
             onFeedback={onFeedback}
             onDelete={onDelete}
+            onUpdated={() => void refresh()}
+            onAdd={() => setTab('add')}
           />
         )}
         {tab === 'settings' && (
@@ -684,7 +1044,7 @@ export default function App() {
         )}
       </div>
 
-      <nav className="nav">
+      <nav className="nav" aria-label="Навигация">
         {(
           [
             ['today', 'сегодня'],
