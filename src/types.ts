@@ -49,7 +49,9 @@ export type Tab = 'today' | 'add' | 'archive' | 'settings'
 
 export type RankedLook = {
   look: Look
+  /** Weather distance — lower is better. Not a date. */
   score: number
+  matchPercent: number
   reason: string
   effectiveWarmth: number
 }

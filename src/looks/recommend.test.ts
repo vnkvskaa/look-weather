@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { effectiveWarmth, rankLooks } from './recommend'
+import { effectiveWarmth, matchPercent, rankLooks } from './recommend'
 import type { Look, WeatherProfile } from '../types'
 
 function weather(partial: Partial<WeatherProfile>): WeatherProfile {
@@ -19,7 +19,7 @@ function weather(partial: Partial<WeatherProfile>): WeatherProfile {
 function look(partial: Partial<Look> & Pick<Look, 'id' | 'weather'>): Look {
   return {
     createdAt: 1,
-    date: partial.weather.date,
+    date: partial.date ?? partial.weather.date,
     photoBlob: new Blob(),
     placeName: 'Москва',
     latitude: 55.75,
@@ -30,34 +30,41 @@ function look(partial: Partial<Look> & Pick<Look, 'id' | 'weather'>): Look {
 }
 
 describe('effectiveWarmth', () => {
-  it('shifts colder feedback down', () => {
+  it('shifts too_cold upward (outfit suits warmer weather)', () => {
     const l = look({
       id: '1',
       weather: weather({ feelsLike: 10 }),
       feedback: 'too_cold',
     })
-    expect(effectiveWarmth(l)).toBe(6.5)
+    expect(effectiveWarmth(l)).toBe(13.5)
   })
 
-  it('shifts hotter feedback up', () => {
+  it('shifts too_hot downward (outfit suits colder weather)', () => {
     const l = look({
       id: '1',
       weather: weather({ feelsLike: 10 }),
       feedback: 'too_hot',
     })
-    expect(effectiveWarmth(l)).toBe(13.5)
+    expect(effectiveWarmth(l)).toBe(6.5)
   })
 })
 
 describe('rankLooks', () => {
   it('prefers looks closer in feels-like', () => {
-    const target = weather({ feelsLike: 5, precipMm: 0, precipProb: 0 })
+    const target = weather({
+      date: '2026-07-20',
+      feelsLike: 5,
+      precipMm: 0,
+      precipProb: 0,
+    })
     const cold = look({
       id: 'cold',
+      date: '2026-01-01',
       weather: weather({ date: '2026-01-01', feelsLike: 4 }),
     })
     const hot = look({
       id: 'hot',
+      date: '2026-06-01',
       weather: weather({ date: '2026-06-01', feelsLike: 28 }),
     })
     const ranked = rankLooks([hot, cold], target, 2)
@@ -65,18 +72,100 @@ describe('rankLooks', () => {
     expect(ranked[0].score).toBeLessThan(ranked[1].score)
   })
 
-  it('uses feedback when ranking', () => {
-    const target = weather({ feelsLike: 6 })
+  it('uses feedback: cold at +10 → match warmer targets', () => {
+    // Felt cold at 10° → comfort ~13.5° → better for target 13 than for target 6
     const base = look({
       id: 'base',
-      weather: weather({ feelsLike: 10 }),
-      feedback: 'too_cold', // effective 6.5
+      date: '2026-03-01',
+      weather: weather({ date: '2026-03-01', feelsLike: 10 }),
+      feedback: 'too_cold',
     })
     const other = look({
       id: 'other',
-      weather: weather({ feelsLike: 16 }),
+      date: '2026-04-01',
+      weather: weather({ date: '2026-04-01', feelsLike: 16 }),
     })
-    const ranked = rankLooks([other, base], target, 2)
+    const warmTarget = weather({ date: '2026-07-20', feelsLike: 13 })
+    const ranked = rankLooks([other, base], warmTarget, 2)
     expect(ranked[0].look.id).toBe('base')
+  })
+
+  it('orders by weather match, not by date or createdAt', () => {
+    const target = weather({
+      date: '2026-07-21',
+      feelsLike: 8,
+      windMs: 2,
+      humidity: 50,
+      cloudCover: 40,
+    })
+    // Newest / latest date, but wrong weather
+    const recentWrong = look({
+      id: 'recent-wrong',
+      date: '2026-07-20',
+      createdAt: 9_000_000,
+      weather: weather({
+        date: '2026-07-20',
+        feelsLike: 28,
+        windMs: 2,
+        humidity: 50,
+        cloudCover: 40,
+      }),
+    })
+    // Older date, but near-perfect weather match
+    const oldMatch = look({
+      id: 'old-match',
+      date: '2025-01-15',
+      createdAt: 1_000,
+      weather: weather({
+        date: '2025-01-15',
+        feelsLike: 8,
+        windMs: 2,
+        humidity: 52,
+        cloudCover: 38,
+      }),
+    })
+    // Medium date, medium match
+    const mid = look({
+      id: 'mid',
+      date: '2026-03-10',
+      createdAt: 5_000_000,
+      weather: weather({
+        date: '2026-03-10',
+        feelsLike: 18,
+        windMs: 2,
+        humidity: 50,
+        cloudCover: 40,
+      }),
+    })
+
+    const ranked = rankLooks([recentWrong, mid, oldMatch], target, 3)
+    expect(ranked.map((r) => r.look.id)).toEqual([
+      'old-match',
+      'mid',
+      'recent-wrong',
+    ])
+    expect(ranked[0].matchPercent).toBeGreaterThan(ranked[1].matchPercent)
+    expect(ranked[1].matchPercent).toBeGreaterThan(ranked[2].matchPercent)
+    expect(ranked[0].reason).toMatch(/совпадение \d+%/)
+  })
+
+  it('excludes looks from the same calendar day as target', () => {
+    const target = weather({ date: '2026-07-21', feelsLike: 12 })
+    const sameDay = look({
+      id: 'same',
+      date: '2026-07-21',
+      weather: weather({ date: '2026-07-21', feelsLike: 12 }),
+    })
+    const other = look({
+      id: 'other',
+      date: '2026-06-01',
+      weather: weather({ date: '2026-06-01', feelsLike: 12 }),
+    })
+    const ranked = rankLooks([sameDay, other], target, 5)
+    expect(ranked.map((r) => r.look.id)).toEqual(['other'])
+  })
+
+  it('matchPercent is higher for closer weather', () => {
+    expect(matchPercent(0.5)).toBeGreaterThan(matchPercent(12))
   })
 })

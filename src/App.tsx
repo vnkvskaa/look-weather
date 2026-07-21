@@ -51,7 +51,7 @@ function formatDateRu(iso: string, time?: string) {
 function formatPickerDate(iso: string) {
   const d = new Date(iso + 'T12:00:00')
   return d.toLocaleDateString('ru-RU', {
-    day: '2-digit',
+    day: 'numeric',
     month: 'short',
     year: 'numeric',
   })
@@ -153,17 +153,20 @@ function FeedbackBar({
     { id: 'too_hot', label: 'жарко' },
   ]
   return (
-    <div className="feedback-row">
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          data-active={value === item.id}
-          onClick={() => onChange(item.id)}
-        >
-          {item.label}
-        </button>
-      ))}
+    <div className="feedback-block">
+      <p className="feedback-caption">в этой одежде было</p>
+      <div className="feedback-row">
+        {items.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            data-active={value === item.id}
+            onClick={() => onChange(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
@@ -432,6 +435,11 @@ function TodayScreen({
       )}
 
       <h2 className="block-title">что надеть</h2>
+      {weather && !loading && looks.length > 0 && (
+        <p className="rank-hint">
+          по похожей погоде: ощущается, ветер, влажность, осадки
+        </p>
+      )}
       {looks.length === 0 && (
         <div className="empty-actions">
           <p className="empty">
@@ -442,30 +450,30 @@ function TodayScreen({
           </button>
         </div>
       )}
-      <div className="look-list">
-        {ranked.map(({ look, reason, effectiveWarmth }, i) => (
+      {weather && !loading && looks.length > 0 && ranked.length === 0 && (
+        <p className="empty">
+          Нет луков за другие дни — добавь ещё образы, чтобы сравнить погоду.
+        </p>
+      )}
+      <div className="look-grid">
+        {ranked.map(({ look, reason, matchPercent: pct }, i) => (
           <article
             key={look.id}
-            className="look-item"
-            style={{ animationDelay: `${i * 60}ms` }}
+            className="look-card"
+            style={{ animationDelay: `${i * 50}ms` }}
           >
-            <div className="look-frame">
+            <div className="look-thumb">
               <Photo blob={look.photoBlob} alt={`Лук ${look.date}`} />
+              <span className="match-badge">{pct}%</span>
             </div>
-            <div className="look-meta">
-              <div>
-                <h3>{formatDateRu(look.date, look.time)}</h3>
-                <p>
-                  {look.placeName ? `${look.placeName} · ` : ''}
-                  {reason}
-                </p>
-              </div>
-              <span className="badge">~{Math.round(effectiveWarmth)}°</span>
+            <div className="look-card-body">
+              <h3>{formatDateRu(look.date, look.time)}</h3>
+              <p className="look-reason">{reason}</p>
+              <FeedbackBar
+                value={look.feedback}
+                onChange={(f) => onFeedback(look.id, f)}
+              />
             </div>
-            <FeedbackBar
-              value={look.feedback}
-              onChange={(f) => onFeedback(look.id, f)}
-            />
           </article>
         ))}
       </div>
@@ -621,12 +629,12 @@ function AddLookScreen({
     }
   }
 
-  const metaHint =
+  const metaLabel =
     metaSource === 'exif'
       ? 'из фото'
       : metaSource === 'file'
         ? 'из файла'
-        : 'правка'
+        : null
 
   return (
     <>
@@ -666,10 +674,13 @@ function AddLookScreen({
         </div>
         <div className="field-row">
           <div className="field">
-            <label>дата · {metaHint}</label>
+            <label>
+              дата
+              {metaLabel ? <span className="field-tag">{metaLabel}</span> : null}
+            </label>
             <DatePicker
               value={date}
-              hint={metaHint}
+              hint="выбрать"
               onChange={(v) => {
                 setDate(v)
                 setMetaSource(null)
@@ -677,10 +688,13 @@ function AddLookScreen({
             />
           </div>
           <div className="field">
-            <label>время · {metaHint}</label>
+            <label>
+              время
+              {metaLabel ? <span className="field-tag">{metaLabel}</span> : null}
+            </label>
             <TimePicker
               value={time}
-              hint={metaHint}
+              hint="выбрать"
               onChange={(v) => {
                 setTime(v)
                 setMetaSource(null)
@@ -690,10 +704,11 @@ function AddLookScreen({
         </div>
         <LocationEditor place={place} onChange={setPlace} />
         {weather && (
-          <p className="status">
-            погода{time ? ` в ${time}` : ''} · {place.placeName}:{' '}
-            {weatherLabel(weather)} · ветер {weather.windMs} м/с · влажн.{' '}
-            {weather.humidity}%
+          <p className="weather-line">
+            погода{time ? ` в ${time}` : ''} · {weatherLabel(weather)}
+            <span>
+              ветер {weather.windMs} м/с · влажн. {weather.humidity}%
+            </span>
           </p>
         )}
         <div className="field">
@@ -778,7 +793,7 @@ function ArchiveScreen({
           </button>
         </div>
       )}
-      <div className="look-list">
+      <div className="look-grid archive-grid">
         {looks.map((look) => {
           const place: PlaceState = {
             placeName: look.placeName || settings.placeName,
@@ -787,87 +802,88 @@ function ArchiveScreen({
             source: look.locationSource ?? 'settings',
           }
           return (
-            <article key={look.id} className="look-item">
-              <div className="look-frame">
+            <article key={look.id} className="look-card">
+              <div className="look-thumb">
                 <Photo blob={look.photoBlob} alt={`Лук ${look.date}`} />
-              </div>
-              <div className="look-meta">
-                <div>
-                  <h3>{formatDateRu(look.date, look.time)}</h3>
-                  <p>
-                    {place.placeName} · {weatherLabel(look.weather)}
-                    {look.note ? ` · ${look.note}` : ''}
-                  </p>
-                </div>
-                <span className="badge">
+                <span className="match-badge">
                   {formatFeels(look.weather.feelsLike)}
                 </span>
               </div>
-              <FeedbackBar
-                value={look.feedback}
-                onChange={(f) => onFeedback(look.id, f)}
-              />
-              {editingId === look.id ? (
-                <>
-                  <LocationEditor
-                    place={place}
-                    compact
-                    onChange={(next) => void applyPlace(look, next)}
-                  />
-                  {locBusy && (
-                    <p className="status loading-pulse">обновляю погоду…</p>
-                  )}
-                  {locError && <p className="error">{locError}</p>}
-                  <button
-                    type="button"
-                    className="text-btn"
-                    onClick={() => setEditingId(null)}
-                  >
-                    закрыть место
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="text-btn"
-                  onClick={() => {
-                    setEditingId(look.id)
-                    setLocError(null)
-                  }}
-                >
-                  изменить место
-                </button>
-              )}
-              {pendingDelete === look.id ? (
-                <div className="confirm-bar">
-                  <p>удалить этот лук?</p>
-                  <button
-                    type="button"
-                    className="ghost-btn"
-                    onClick={() => setPendingDelete(null)}
-                  >
-                    отмена
-                  </button>
-                  <button
-                    type="button"
-                    className="solid-btn"
-                    onClick={() => {
-                      onDelete(look.id)
-                      setPendingDelete(null)
-                    }}
-                  >
-                    удалить
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  className="text-btn"
-                  onClick={() => setPendingDelete(look.id)}
-                >
-                  удалить
-                </button>
-              )}
+              <div className="look-card-body">
+                <h3>{formatDateRu(look.date, look.time)}</h3>
+                <p className="look-reason">
+                  {place.placeName} · {weatherLabel(look.weather)}
+                  {look.note ? ` · ${look.note}` : ''}
+                </p>
+                <FeedbackBar
+                  value={look.feedback}
+                  onChange={(f) => onFeedback(look.id, f)}
+                />
+                {editingId === look.id ? (
+                  <>
+                    <LocationEditor
+                      place={place}
+                      compact
+                      onChange={(next) => void applyPlace(look, next)}
+                    />
+                    {locBusy && (
+                      <p className="status loading-pulse">обновляю погоду…</p>
+                    )}
+                    {locError && <p className="error">{locError}</p>}
+                    <button
+                      type="button"
+                      className="text-btn"
+                      onClick={() => setEditingId(null)}
+                    >
+                      закрыть место
+                    </button>
+                  </>
+                ) : (
+                  <div className="card-actions">
+                    <button
+                      type="button"
+                      className="text-btn"
+                      onClick={() => {
+                        setEditingId(look.id)
+                        setLocError(null)
+                      }}
+                    >
+                      место
+                    </button>
+                    {pendingDelete === look.id ? null : (
+                      <button
+                        type="button"
+                        className="text-btn"
+                        onClick={() => setPendingDelete(look.id)}
+                      >
+                        удалить
+                      </button>
+                    )}
+                  </div>
+                )}
+                {pendingDelete === look.id && (
+                  <div className="confirm-bar">
+                    <p>удалить этот лук?</p>
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() => setPendingDelete(null)}
+                    >
+                      отмена
+                    </button>
+                    <button
+                      type="button"
+                      className="solid-btn"
+                      onClick={() => {
+                        onDelete(look.id)
+                        setPendingDelete(null)
+                      }}
+                    >
+                      удалить
+                    </button>
+                  </div>
+                )}
+              </div>
             </article>
           )
         })}
