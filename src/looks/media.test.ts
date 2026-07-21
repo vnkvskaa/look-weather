@@ -8,8 +8,8 @@ import {
 
 describe('photo size defaults', () => {
   it('keeps main photos sharp enough to read outfits', () => {
-    expect(PHOTO_MAIN.maxSide).toBeGreaterThanOrEqual(1400)
-    expect(PHOTO_MAIN.quality).toBeGreaterThanOrEqual(0.82)
+    expect(PHOTO_MAIN.maxSide).toBeGreaterThanOrEqual(1800)
+    expect(PHOTO_MAIN.quality).toBeGreaterThanOrEqual(0.88)
     expect(PHOTO_THUMB.maxSide).toBeLessThan(PHOTO_MAIN.maxSide)
     expect(PHOTO_THUMB.maxSide).toBeGreaterThanOrEqual(400)
   })

@@ -7,6 +7,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react'
+import { createPortal } from 'react-dom'
 import {
   addLook,
   deleteLook,
@@ -206,7 +207,7 @@ function PhotoLightbox({
     }
   }, [onClose])
 
-  return (
+  return createPortal(
     <div
       className="photo-lightbox"
       role="dialog"
@@ -217,7 +218,10 @@ function PhotoLightbox({
       <button
         type="button"
         className="photo-lightbox-close"
-        onClick={onClose}
+        onClick={(e) => {
+          e.stopPropagation()
+          onClose()
+        }}
         aria-label="закрыть"
       >
         закрыть
@@ -228,7 +232,8 @@ function PhotoLightbox({
       >
         <Photo lookId={lookId} alt={alt} variant="full" />
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -492,15 +497,21 @@ function DayPhotoStrip({
 }) {
   const active = looks.find((l) => l.id === activeId) ?? looks[0]
   const multi = looks.length > 1
-  const [lightbox, setLightbox] = useState(false)
+  const [lightboxId, setLightboxId] = useState<string | null>(null)
   const alt = `Лук ${active.date}${active.time ? ` ${active.time}` : ''}`
+  const lightboxLook =
+    looks.find((l) => l.id === lightboxId) ?? (lightboxId ? active : null)
 
   return (
     <div className={multi ? 'day-media' : undefined}>
       <button
         type="button"
         className="look-thumb look-thumb-open"
-        onClick={() => setLightbox(true)}
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          setLightboxId(active.id)
+        }}
         aria-label="открыть фото крупнее"
       >
         <Photo lookId={active.id} alt={alt} variant="full" />
@@ -525,18 +536,24 @@ function DayPhotoStrip({
               aria-selected={look.id === active.id}
               data-active={look.id === active.id}
               data-favorite={look.favorite === true}
-              onClick={() => onSelect(look.id)}
+              onClick={() => {
+                if (look.id === active.id) {
+                  setLightboxId(look.id)
+                  return
+                }
+                onSelect(look.id)
+              }}
             >
               <Photo lookId={look.id} alt="" variant="thumb" />
             </button>
           ))}
         </div>
       ) : null}
-      {lightbox ? (
+      {lightboxLook ? (
         <PhotoLightbox
-          lookId={active.id}
-          alt={alt}
-          onClose={() => setLightbox(false)}
+          lookId={lightboxLook.id}
+          alt={`Лук ${lightboxLook.date}${lightboxLook.time ? ` ${lightboxLook.time}` : ''}`}
+          onClose={() => setLightboxId(null)}
         />
       ) : null}
     </div>
@@ -2873,9 +2890,9 @@ function SettingsScreen({
           <p className="field-hint">оценка места недоступна в этом браузере</p>
         )}
         <p className="field-hint">
-          Новые фото сохраняются крупнее (~1600px), чтобы лук было видно. В
-          списках превью маленькие, в карточке — полное фото. Уже сжатые раньше
-          кадры не «улучшатся» сами — их можно загрузить заново.
+          Новые фото ~1920px. В карточке — полное фото; тап открывает на весь
+          экран. Уже сильно сжатые раньше кадры не станут чётче сами — загрузи
+          заново, если нужно рассмотреть детали.
         </p>
         <button
           type="button"
