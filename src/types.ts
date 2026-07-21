@@ -2,6 +2,10 @@ export type Feedback = 'too_cold' | 'ok' | 'too_hot'
 
 export type LocationSource = 'photo' | 'settings' | 'search' | 'geo'
 
+export type ItemTag = 'верх' | 'низ' | 'слой' | 'обувь' | 'другое'
+
+export const ITEM_TAGS: ItemTag[] = ['верх', 'низ', 'слой', 'обувь', 'другое']
+
 export type Place = {
   placeName: string
   latitude: number
@@ -28,6 +32,8 @@ export type Look = {
   /** ISO-ish local timestamp from photo metadata */
   takenAt?: string
   note?: string
+  /** Clothing parts — chips on add / cards */
+  items?: ItemTag[]
   photoBlob: Blob
   weather: WeatherProfile
   /** Where the look was worn — drives that look's weather snapshot */
@@ -36,6 +42,7 @@ export type Look = {
   longitude: number
   locationSource?: LocationSource
   feedback?: Feedback
+  /** Optional short comfort note */
   feedbackNote?: string
 }
 
@@ -46,6 +53,10 @@ export type LookExport = Omit<Look, 'photoBlob'> & {
 export type Settings = Place & {
   /** User confirmed city on onboarding / settings */
   cityConfirmed?: boolean
+  /** Permanent home city — kept when travel override is active */
+  homePlace?: Place
+  /** Temporary travel city; when set, placeName/lat/lon follow it */
+  travelPlace?: Place
   /** GitHub PAT — only in IndexedDB, never in public repo or shared backup JSON */
   githubToken?: string
   /** Private gist id for cloud backup */
@@ -72,4 +83,20 @@ export type RankedLook = {
   matchPercent: number
   reason: string
   effectiveWarmth: number
+}
+
+/** Same calendar day — one card in lists / recommendations. */
+export type DayGroup = {
+  date: string
+  looks: Look[]
+  /** Prefer time near outing / most complete place */
+  primary: Look
+}
+
+export type RankedDayGroup = DayGroup & {
+  score: number
+  matchPercent: number
+  reason: string
+  effectiveWarmth: number
+  best: RankedLook
 }

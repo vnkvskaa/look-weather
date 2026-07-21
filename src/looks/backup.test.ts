@@ -15,10 +15,14 @@ describe('settingsForBackup', () => {
       githubToken: 'ghp_secret',
       githubGistId: 'abc123',
       githubAutoBackup: true,
+      homePlace: { placeName: 'Москва', latitude: 55.75, longitude: 37.62 },
+      travelPlace: { placeName: 'Стамбул', latitude: 41.01, longitude: 28.97 },
     })
     expect(out.githubToken).toBeUndefined()
     expect(out.githubGistId).toBe('abc123')
     expect(out.githubAutoBackup).toBe(true)
+    expect(out.homePlace?.placeName).toBe('Москва')
+    expect(out.travelPlace?.placeName).toBe('Стамбул')
   })
 })
 

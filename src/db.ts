@@ -82,3 +82,16 @@ export async function replaceAllLooks(looks: Look[]): Promise<void> {
     await db.looks.bulkPut(looks)
   })
 }
+
+/**
+ * Upsert looks by id — keeps local-only looks, overwrites matching ids.
+ * Safer than wipe-and-replace for import / restore.
+ */
+export async function mergeLooks(looks: Look[]): Promise<{
+  imported: number
+  total: number
+}> {
+  await db.looks.bulkPut(looks)
+  const total = await db.looks.count()
+  return { imported: looks.length, total }
+}

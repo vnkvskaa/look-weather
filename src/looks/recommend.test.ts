@@ -4,7 +4,10 @@ import {
   looksNeedingFeedback,
   matchPercent,
   rainAdvice,
+  rankDayGroups,
   rankLooks,
+  weatherTips,
+  windAdvice,
 } from './recommend'
 import type { Look, WeatherProfile } from '../types'
 
@@ -79,7 +82,6 @@ describe('rankLooks', () => {
   })
 
   it('uses feedback: cold at +10 → match warmer targets', () => {
-    // Felt cold at 10° → comfort ~13.5° → better for target 13 than for target 6
     const base = look({
       id: 'base',
       date: '2026-03-01',
@@ -104,7 +106,6 @@ describe('rankLooks', () => {
       humidity: 50,
       cloudCover: 40,
     })
-    // Newest / latest date, but wrong weather
     const recentWrong = look({
       id: 'recent-wrong',
       date: '2026-07-20',
@@ -117,7 +118,6 @@ describe('rankLooks', () => {
         cloudCover: 40,
       }),
     })
-    // Older date, but near-perfect weather match
     const oldMatch = look({
       id: 'old-match',
       date: '2025-01-15',
@@ -130,7 +130,6 @@ describe('rankLooks', () => {
         cloudCover: 38,
       }),
     })
-    // Medium date, medium match
     const mid = look({
       id: 'mid',
       date: '2026-03-10',
@@ -197,6 +196,39 @@ describe('rankLooks', () => {
     expect(ranked[0].reason).toMatch(/защит/)
   })
 
+  it('boosts look with слой tag when target is wet', () => {
+    const target = weather({
+      date: '2026-07-21',
+      feelsLike: 12,
+      precipMm: 3,
+      precipProb: 80,
+    })
+    const plain = look({
+      id: 'plain',
+      date: '2026-06-01',
+      weather: weather({
+        date: '2026-06-01',
+        feelsLike: 14,
+        precipMm: 2,
+        precipProb: 70,
+      }),
+    })
+    const layered = look({
+      id: 'layered',
+      date: '2026-05-01',
+      items: ['слой'],
+      weather: weather({
+        date: '2026-05-01',
+        feelsLike: 14,
+        precipMm: 2,
+        precipProb: 70,
+      }),
+    })
+    const ranked = rankLooks([plain, layered], target, 2)
+    expect(ranked[0].look.id).toBe('layered')
+    expect(ranked[0].score).toBeLessThan(ranked[1].score)
+  })
+
   it('looksNeedingFeedback returns recent looks without feedback', () => {
     const today = new Date()
     const pad = (n: number) => String(n).padStart(2, '0')
@@ -223,5 +255,42 @@ describe('rankLooks', () => {
     expect(looksNeedingFeedback([recent, withFb, stale], 2).map((l) => l.id)).toEqual([
       'recent',
     ])
+  })
+})
+
+describe('rankDayGroups', () => {
+  it('returns one card per calendar date', () => {
+    const target = weather({ date: '2026-07-21', feelsLike: 10 })
+    const a1 = look({
+      id: 'a1',
+      date: '2026-06-01',
+      time: '09:00',
+      weather: weather({ date: '2026-06-01', feelsLike: 9 }),
+    })
+    const a2 = look({
+      id: 'a2',
+      date: '2026-06-01',
+      time: '18:00',
+      weather: weather({ date: '2026-06-01', feelsLike: 28 }),
+    })
+    const b = look({
+      id: 'b',
+      date: '2026-05-01',
+      weather: weather({ date: '2026-05-01', feelsLike: 20 }),
+    })
+    const ranked = rankDayGroups([a1, a2, b], target, 5)
+    expect(ranked.map((g) => g.date)).toEqual(['2026-06-01', '2026-05-01'])
+    expect(ranked[0].looks).toHaveLength(2)
+    expect(ranked[0].best.look.id).toBe('a1')
+  })
+})
+
+describe('weatherTips', () => {
+  it('adds wind tip when strong', () => {
+    const tip = windAdvice(weather({ windMs: 9 }))
+    expect(tip).toMatch(/ветер/)
+    expect(
+      weatherTips(weather({ windMs: 9, precipMm: 0, precipProb: 0 })),
+    ).toContain(tip!)
   })
 })

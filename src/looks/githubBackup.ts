@@ -130,7 +130,10 @@ async function finishSave(
   return { gistId, recompressed, bytes }
 }
 
-export async function restoreBackupFromGithub(): Promise<number> {
+export async function restoreBackupFromGithub(): Promise<{
+  imported: number
+  total: number
+}> {
   const settings = await getSettings()
   const token = settings.githubToken?.trim()
   const gistId = settings.githubGistId?.trim()

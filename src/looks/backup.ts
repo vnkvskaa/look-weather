@@ -1,5 +1,5 @@
-import { listLooks, replaceAllLooks, getSettings, saveSettings } from '../db'
-import type { Look, LookExport, Settings } from '../types'
+import { listLooks, mergeLooks, getSettings, saveSettings } from '../db'
+import type { Look, LookExport, Place, Settings } from '../types'
 import { base64ToBlob, blobToBase64, compressImage } from './media'
 
 export type BackupPayload = {
@@ -9,6 +9,15 @@ export type BackupPayload = {
   looks: LookExport[]
 }
 
+function placeForBackup(place?: Place): Place | undefined {
+  if (!place) return undefined
+  return {
+    placeName: place.placeName,
+    latitude: place.latitude,
+    longitude: place.longitude,
+  }
+}
+
 /** Settings fields safe to put in a shareable / gist JSON (no PAT). */
 export function settingsForBackup(settings: Settings): Settings {
   return {
@@ -16,12 +25,19 @@ export function settingsForBackup(settings: Settings): Settings {
     latitude: settings.latitude,
     longitude: settings.longitude,
     cityConfirmed: settings.cityConfirmed,
+    homePlace: placeForBackup(settings.homePlace),
+    travelPlace: placeForBackup(settings.travelPlace),
     githubGistId: settings.githubGistId,
     githubAutoBackup: settings.githubAutoBackup,
     lastBackupAt: settings.lastBackupAt,
     looksCountAtBackup: settings.looksCountAtBackup,
     backupReminderDismissedAt: settings.backupReminderDismissedAt,
   }
+}
+
+export type ImportResult = {
+  imported: number
+  total: number
 }
 
 export type BackupBuildOptions = {
@@ -86,7 +102,7 @@ export async function shareOrDownloadBackup(): Promise<void> {
 
 export async function importBackupPayload(
   data: BackupPayload,
-): Promise<number> {
+): Promise<ImportResult> {
   if (data.version !== 1 || !Array.isArray(data.looks)) {
     throw new Error('Неверный формат бэкапа')
   }
@@ -100,20 +116,25 @@ export async function importBackupPayload(
   })
 
   const current = await getSettings()
-  await replaceAllLooks(looks)
+  // Merge by id — local-only looks stay; same id gets backup version
+  const { imported, total } = await mergeLooks(looks)
   if (data.settings) {
+    const fromBackup = settingsForBackup(data.settings)
     await saveSettings({
-      ...settingsForBackup(data.settings),
+      ...current,
+      ...fromBackup,
       // Keep local PAT — never overwrite from backup JSON
       githubToken: current.githubToken,
       githubGistId:
         data.settings.githubGistId || current.githubGistId,
+      // Prefer local home if backup has none
+      homePlace: fromBackup.homePlace ?? current.homePlace,
     })
   }
-  return looks.length
+  return { imported, total }
 }
 
-export async function importBackupFile(file: File): Promise<number> {
+export async function importBackupFile(file: File): Promise<ImportResult> {
   const text = await file.text()
   const data = JSON.parse(text) as BackupPayload
   return importBackupPayload(data)
