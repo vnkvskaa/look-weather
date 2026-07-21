@@ -199,11 +199,14 @@ function PhotoLightbox({
       if (e.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', onKey)
-    const prev = document.body.style.overflow
+    const prevOverflow = document.body.style.overflow
+    const prevTouch = document.body.style.touchAction
     document.body.style.overflow = 'hidden'
+    document.body.style.touchAction = 'none'
     return () => {
       window.removeEventListener('keydown', onKey)
-      document.body.style.overflow = prev
+      document.body.style.overflow = prevOverflow
+      document.body.style.touchAction = prevTouch
     }
   }, [onClose])
 
@@ -227,7 +230,7 @@ function PhotoLightbox({
         закрыть
       </button>
       <div
-        className="photo-lightbox-frame"
+        className="photo-lightbox-photo"
         onClick={(e) => e.stopPropagation()}
       >
         <Photo lookId={lookId} alt={alt} variant="full" />
