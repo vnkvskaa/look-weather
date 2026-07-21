@@ -83,7 +83,7 @@ export function isAutoBackupEnabled(settings: {
 }
 
 /**
- * Schedule a background gist upload. No-op without token / when toggled off.
+ * Schedule a background GitHub repo upload. No-op without token / when toggled off.
  * Coalesces rapid edits; after «add look» runs sooner but still respects min interval.
  */
 export function scheduleAutoBackup(reason: AutoBackupReason = 'look'): void {
@@ -138,9 +138,10 @@ async function runAutoBackup(): Promise<void> {
     const result = await saveBackupToGithub()
     notify({
       kind: 'ok',
-      message: result.recompressed
-        ? 'сохранено — превью'
-        : 'сохранено',
+      message:
+        result.photosUploaded > 0
+          ? `сохранено · +${result.photosUploaded} фото`
+          : 'сохранено',
     })
     if (clearOkTimer) clearTimeout(clearOkTimer)
     clearOkTimer = setTimeout(() => {

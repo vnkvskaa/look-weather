@@ -181,3 +181,43 @@ export function sortDayGroupsByFeelsLike(
     return b.date.localeCompare(a.date)
   })
 }
+
+/** Feels-like buckets for archive filter (°C). */
+export type TempBucketId =
+  | 'all'
+  | 'lt0'
+  | '0-5'
+  | '5-10'
+  | '10-15'
+  | '15-20'
+  | '20-25'
+  | 'gt25'
+
+export type TempBucket = {
+  id: TempBucketId
+  /** Short chip label. */
+  label: string
+  /** null = no filter («все»). */
+  match: ((feelsLike: number) => boolean) | null
+}
+
+export const TEMP_BUCKETS: readonly TempBucket[] = [
+  { id: 'all', label: 'все', match: null },
+  { id: 'lt0', label: '<0°', match: (t) => t < 0 },
+  { id: '0-5', label: '0–5°', match: (t) => t >= 0 && t < 5 },
+  { id: '5-10', label: '5–10°', match: (t) => t >= 5 && t < 10 },
+  { id: '10-15', label: '10–15°', match: (t) => t >= 10 && t < 15 },
+  { id: '15-20', label: '15–20°', match: (t) => t >= 15 && t < 20 },
+  { id: '20-25', label: '20–25°', match: (t) => t >= 20 && t < 25 },
+  { id: 'gt25', label: '>25°', match: (t) => t >= 25 },
+]
+
+/** Keep day groups whose primary look feelsLike falls in the bucket. */
+export function filterDayGroupsByTempBucket(
+  groups: DayGroup[],
+  bucketId: TempBucketId,
+): DayGroup[] {
+  const bucket = TEMP_BUCKETS.find((b) => b.id === bucketId)
+  if (!bucket?.match) return groups
+  return groups.filter((g) => bucket.match!(g.primary.weather.feelsLike))
+}

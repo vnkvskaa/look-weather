@@ -38,6 +38,8 @@ import {
   type AutoBackupStatus,
 } from './looks/autoBackup'
 import {
+  githubSaveStatusMessage,
+  planGithubBackup,
   restoreBackupFromGithub,
   saveBackupToGithub,
   validateGithubToken,
@@ -55,12 +57,15 @@ import {
 } from './looks/media'
 import { importLooksBatch } from './looks/importLook'
 import {
+  filterDayGroupsByTempBucket,
   formatMonthChip,
   formatMonthHeader,
   groupDayGroupsByMonth,
   groupLooksByDate,
   listMonthsFromLooks,
   sortDayGroupsByFeelsLike,
+  TEMP_BUCKETS,
+  type TempBucketId,
 } from './looks/dayGroups'
 import {
   isThinAdvice,
@@ -184,16 +189,22 @@ function Photo({
   variant?: 'thumb' | 'full'
 }) {
   const [url, setUrl] = useState<string | null>(null)
+  const [missing, setMissing] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     setUrl(null)
+    setMissing(false)
     void (async () => {
       const blob =
         variant === 'full'
           ? await getLookFullBlob(lookId)
           : await getLookThumbBlob(lookId)
-      if (cancelled || !blob) return
+      if (cancelled) return
+      if (!blob) {
+        setMissing(true)
+        return
+      }
       setUrl(getLookObjectUrl(lookId, blob, variant))
     })()
     return () => {
@@ -201,6 +212,13 @@ function Photo({
     }
   }, [lookId, variant])
 
+  if (missing) {
+    return (
+      <div className="photo-missing" role="img" aria-label="нет фото">
+        нет фото
+      </div>
+    )
+  }
   if (!url) {
     return <div className="photo-skeleton" aria-hidden />
   }
@@ -1581,6 +1599,7 @@ function ArchiveScreen({
   const [locError, setLocError] = useState<string | null>(null)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
   const [monthFilter, setMonthFilter] = useState<string | null>(null)
+  const [tempBucket, setTempBucket] = useState<TempBucketId>('all')
   const [sortMode, setSortMode] = useState<'date' | 'temp'>('date')
   const [tempDir, setTempDir] = useState<'asc' | 'desc'>('asc')
 
@@ -1604,19 +1623,25 @@ function ArchiveScreen({
     [pool, monthFilter],
   )
   const dayGroups = useMemo(() => {
-    const groups = groupLooksByDate(filtered)
+    const grouped = groupLooksByDate(filtered)
+    const byBucket = filterDayGroupsByTempBucket(grouped, tempBucket)
     if (sortMode === 'temp') {
-      return sortDayGroupsByFeelsLike(groups, tempDir)
+      return sortDayGroupsByFeelsLike(byBucket, tempDir)
     }
-    return groups
-  }, [filtered, sortMode, tempDir])
+    return byBucket
+  }, [filtered, tempBucket, sortMode, tempDir])
   const monthSections = useMemo(
     () => groupDayGroupsByMonth(dayGroups),
     [dayGroups],
   )
   const hasFavorites = looks.some((l) => l.favorite)
   const showMonthNav = months.length > 1
+  const showArchiveNav =
+    looks.length > 0 &&
+    (showMonthNav || hasFavorites || looks.length > 1)
   const byTemp = sortMode === 'temp'
+  const tempFilteredOut =
+    looks.length > 0 && dayGroups.length === 0 && tempBucket !== 'all'
 
   async function applyPlace(look: Look, next: PlaceState) {
     setLocBusy(true)
@@ -1727,7 +1752,7 @@ function ArchiveScreen({
       <div className="section-kicker">архив</div>
       <h2 className="block-title">все луки</h2>
 
-      {(showMonthNav || hasFavorites || looks.length > 1) && looks.length > 0 && (
+      {showArchiveNav && (
         <div className="archive-nav">
           <div className="control-row filter-row archive-sort-row">
             <button
@@ -1757,6 +1782,24 @@ function ArchiveScreen({
                 {tempDir === 'asc' ? 'холод → тепло' : 'тепло → холод'}
               </button>
             ) : null}
+          </div>
+          <div
+            className="archive-temps"
+            role="navigation"
+            aria-label="температура"
+          >
+            <span className="archive-temps-label">температура</span>
+            {TEMP_BUCKETS.map((bucket) => (
+              <button
+                key={bucket.id}
+                type="button"
+                className="ghost-btn archive-temp-chip"
+                data-active={tempBucket === bucket.id}
+                onClick={() => setTempBucket(bucket.id)}
+              >
+                {bucket.label}
+              </button>
+            ))}
           </div>
           {showMonthNav && (
             <div className="archive-months" role="navigation" aria-label="месяцы">
@@ -1809,17 +1852,17 @@ function ArchiveScreen({
       )}
       {looks.length > 0 && dayGroups.length === 0 && (
         <p className="empty">
-          {favoritesOnly
-            ? 'В избранном пусто — отметь ★ на карточке.'
-            : 'В этом месяце пусто.'}
+          {tempFilteredOut
+            ? 'В этом диапазоне пусто.'
+            : favoritesOnly
+              ? 'В избранном пусто — отметь ★ на карточке.'
+              : 'В этом месяце пусто.'}
         </p>
       )}
 
       <div
         className="archive-list"
-        data-has-nav={
-          showMonthNav || hasFavorites || looks.length > 1 ? 'true' : 'false'
-        }
+        data-has-nav={showArchiveNav ? 'true' : 'false'}
       >
         {byTemp ? (
           <div className="look-grid archive-grid">
@@ -1890,7 +1933,11 @@ function backupChecks(settings: Settings): BackupChecks {
     account: token || Boolean(settings.githubBackupVerifiedAt),
     token,
     auto: isAutoBackupEnabled(settings),
-    copy: Boolean(settings.githubGistId?.trim() || settings.lastBackupAt),
+    copy: Boolean(
+      settings.githubRepoFullName?.trim() ||
+        settings.githubGistId?.trim() ||
+        settings.lastBackupAt,
+    ),
     verified: Boolean(settings.githubBackupVerifiedAt),
   }
 }
@@ -1927,6 +1974,8 @@ function BackupPanel({
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [progress, setProgress] = useState<string | null>(null)
+  const [planLabel, setPlanLabel] = useState<string | null>(null)
 
   useEffect(() => {
     setToken(settings.githubToken ?? '')
@@ -1942,6 +1991,20 @@ function BackupPanel({
       ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }, [openWizard, checks.token, checks.copy])
+
+  useEffect(() => {
+    if (!checks.token) {
+      setPlanLabel(null)
+      return
+    }
+    let cancelled = false
+    void planGithubBackup().then((plan) => {
+      if (!cancelled) setPlanLabel(plan.label)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [checks.token, settings.lastBackupAt, settings.githubRepoFullName])
 
   async function persistSettings(next: Settings, msg?: string) {
     await saveSettings(next)
@@ -1969,10 +2032,11 @@ function BackupPanel({
     }
   }
 
-  async function saveFirstCopy() {
+  async function runSave() {
     setBusy(true)
     setError(null)
     setStatus(null)
+    setProgress(null)
     try {
       if (token.trim() && token.trim() !== (settings.githubToken ?? '')) {
         await validateGithubToken(token)
@@ -1982,22 +2046,21 @@ function BackupPanel({
           githubAutoBackup: true,
         })
       }
-      const result = await saveBackupToGithub()
+      const result = await saveBackupToGithub({
+        onProgress: (p) => setProgress(p.message),
+      })
       const refreshed = await getSettings()
       const next: Settings = {
         ...refreshed,
         githubAutoBackup: true,
         githubBackupVerifiedAt: Date.now(),
       }
-      await persistSettings(
-        next,
-        result.recompressed
-          ? 'копия сохранена (превью)'
-          : 'копия сохранена',
-      )
+      await persistSettings(next, githubSaveStatusMessage(result))
       setWizard(false)
+      setProgress(null)
     } catch (e) {
       setError((e as Error).message)
+      setProgress(null)
     } finally {
       setBusy(false)
     }
@@ -2006,8 +2069,11 @@ function BackupPanel({
   async function saveNow() {
     setBusy(true)
     setError(null)
+    setProgress(null)
     try {
-      const result = await saveBackupToGithub()
+      const result = await saveBackupToGithub({
+        onProgress: (p) => setProgress(p.message),
+      })
       const refreshed = await getSettings()
       onSettings({
         ...refreshed,
@@ -2017,11 +2083,11 @@ function BackupPanel({
         ...refreshed,
         githubBackupVerifiedAt: Date.now(),
       })
-      setStatus(
-        result.recompressed ? 'сохранено · превью' : 'сохранено',
-      )
+      setStatus(githubSaveStatusMessage(result))
+      setProgress(null)
     } catch (e) {
       setError((e as Error).message)
+      setProgress(null)
     } finally {
       setBusy(false)
     }
@@ -2030,13 +2096,17 @@ function BackupPanel({
   async function restoreNow() {
     setBusy(true)
     setError(null)
+    setProgress(null)
     try {
-      const result = await restoreBackupFromGithub()
+      const result = await restoreBackupFromGithub({
+        onProgress: (p) => setProgress(p.message),
+      })
       suppressAutoBackup()
       setStatus(`восстановлено: ${result.imported}, всего ${result.total}`)
       window.location.reload()
     } catch (e) {
       setError((e as Error).message)
+      setProgress(null)
     } finally {
       setBusy(false)
     }
@@ -2049,9 +2119,12 @@ function BackupPanel({
       const result = await verifyGithubBackup()
       const refreshed = await getSettings()
       onSettings(refreshed)
+      const where = result.repoFullName
+        ? ` · ${result.repoFullName}`
+        : ''
       setStatus(
         result.hasCopy
-          ? `проверено · ${result.login}`
+          ? `проверено · ${result.login}${where}`
           : `ключ ок · ${result.login} — сохрани первую копию`,
       )
     } catch (e) {
@@ -2080,10 +2153,13 @@ function BackupPanel({
   const bannerText = autoError
     ? `Не удалось автосохранить: ${autoError}`
     : setupDone
-      ? 'Копии сохраняются сами'
+      ? 'Копии с фото сохраняются сами'
       : gap
         ? `Осталось: ${gap}`
         : 'Копия ещё не настроена'
+
+  const repoHint =
+    settings.githubRepoFullName?.trim() || 'look-weather-data'
 
   return (
     <div className="backup-panel" ref={ref} id="backup-guide">
@@ -2094,6 +2170,9 @@ function BackupPanel({
         {setupDone && settings.lastBackupAt ? (
           <p className="backup-banner-meta">
             последняя копия: {formatBackupWhen(settings.lastBackupAt)}
+            {settings.githubRepoFullName
+              ? ` · ${settings.githubRepoFullName}`
+              : ''}
           </p>
         ) : null}
         {!setupDone && !wizard ? (
@@ -2142,15 +2221,23 @@ function BackupPanel({
       </ul>
 
       {checks.token ? (
-        <label className="auto-backup-row">
-          <input
-            type="checkbox"
-            checked={autoOn}
-            onChange={(e) => void setAutoBackup(e.target.checked)}
-          />
-          <span className="auto-backup-box" aria-hidden />
-          <span className="auto-backup-label">автосохранение копий</span>
-        </label>
+        <>
+          <label className="auto-backup-row">
+            <input
+              type="checkbox"
+              checked={autoOn}
+              onChange={(e) => void setAutoBackup(e.target.checked)}
+            />
+            <span className="auto-backup-box" aria-hidden />
+            <span className="auto-backup-label">автосохранение с фото</span>
+          </label>
+          <p className="field-hint">
+            Копия лежит в закрытой папке-репозитории на твоём GitHub (
+            {repoHint}): список луков и сжатые фото по одному файлу. Новые луки
+            дописываются, старые не перезаливаются зря.
+          </p>
+          {planLabel ? <p className="meta-chip">{planLabel}</p> : null}
+        </>
       ) : null}
 
       {wizard && (
@@ -2172,9 +2259,11 @@ function BackupPanel({
                 открыть GitHub
               </a>
               <p>
-                Потом создай ключ для look. На странице отметь только право{' '}
-                <code>gist</code>, нажми Generate token и сразу скопируй
-                длинную строку — её показывают один раз.
+                Потом создай ключ для look. Нужен доступ к закрытым
+                репозиториям — на странице отметь право{' '}
+                <code>repo</code> (или fine-grained: Contents чтение и запись
+                на репозиторий копии). Сгенерируй ключ и сразу скопируй строку —
+                её показывают один раз.
               </p>
               <a
                 className="olive-btn backup-cta"
@@ -2195,7 +2284,14 @@ function BackupPanel({
                 <ul className="backup-hints">
                   <li>Note — любое имя, например look</li>
                   <li>Expiration — без срока или длинный</li>
-                  <li>В правах галочка только у gist</li>
+                  <li>
+                    Classic: галочка у <code>repo</code> (полный доступ к
+                    private repositories)
+                  </li>
+                  <li>
+                    Fine-grained: Contents — Read and write на репозиторий
+                    look-weather-data
+                  </li>
                   <li>Скопируй строку ghp_… сразу</li>
                 </ul>
               ) : null}
@@ -2245,16 +2341,19 @@ function BackupPanel({
           {step === 3 && (
             <div className="backup-wizard-body">
               <p>
-                Сохрани первую копию: данные и превью фото (лёгкий файл). Полные
-                фото — отдельно в «файлы» → «полная копия».
+                Создадим закрытую папку на GitHub и зальём туда луки с фото.
+                Первый раз может занять время — фото идут по одному. Потом
+                дописываются только новые.
               </p>
+              {planLabel ? <p className="meta-chip">{planLabel}</p> : null}
+              {progress ? <p className="status">{progress}</p> : null}
               <button
                 type="button"
                 className="olive-btn"
                 disabled={busy}
-                onClick={() => void saveFirstCopy()}
+                onClick={() => void runSave()}
               >
-                {busy ? 'сохраняю…' : 'сохранить первую копию'}
+                {busy ? progress || 'сохраняю…' : 'сохранить первую копию'}
               </button>
               <button
                 type="button"
@@ -2278,6 +2377,7 @@ function BackupPanel({
 
       {hasCopy && !wizard && (
         <div className="backup-ready">
+          {progress ? <p className="status">{progress}</p> : null}
           <div className="settings-actions">
             <button
               type="button"
@@ -2285,7 +2385,7 @@ function BackupPanel({
               disabled={busy}
               onClick={() => void saveNow()}
             >
-              {busy ? '…' : 'сохранить сейчас'}
+              {busy ? progress || '…' : 'сохранить сейчас'}
             </button>
             <button
               type="button"
@@ -2320,8 +2420,10 @@ function BackupPanel({
       {status && <p className="status">{status}</p>}
       {error && <p className="error">{error}</p>}
       <p className="field-hint">
-        Ключ храни только на телефоне. На новом устройстве: вставь тот же
-        ключ → восстановить.
+        Ключ храни только на телефоне. На новом устройстве: вставь тот же ключ →
+        восстановить. Если локальное фото уже есть, оно не затирается. Старую
+        облачную копию ещё можно открыть один раз; новые сохранения идут в
+        закрытый репозиторий с фото.
       </p>
     </div>
   )
@@ -2453,7 +2555,7 @@ function SettingsScreen({
       await shareOrDownloadBackup()
       const next = await markBackupDone(looksCount)
       onSettings(next)
-      setStatus('файл готов — превью и данные, для GitHub / повседневного')
+      setStatus('файл готов — превью и данные')
     } catch {
       setError('Не удалось экспортировать')
     }
@@ -2622,12 +2724,13 @@ function SettingsScreen({
 
         <h3 className="settings-sub">файлы</h3>
         <p className="field-hint">
-          Обычная копия и автосохранение на GitHub — данные и превью (легче,
-          без зависаний). Полная копия — все фото целиком; файл может быть
-          большим.
+          На GitHub луки с фото лежат в закрытом репозитории. Здесь — файл на
+          телефон или в iCloud: обычная копия с превью или полная со всеми
+          кадрами.
         </p>
         <p className="field-hint">
-          Импорт дополняет архив: локальные луки с другими id не пропадут.
+          Импорт дополняет архив: локальные луки с другими id не пропадут. Если
+          id совпал и фото уже есть — картинка на телефоне не затирается.
         </p>
         <button
           type="button"

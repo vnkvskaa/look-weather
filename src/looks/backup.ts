@@ -1,6 +1,8 @@
 import {
   listLooksMeta,
   mergeLooks,
+  upsertLookMeta,
+  upsertLookThumb,
   getSettings,
   saveSettings,
   getLookPhoto,
@@ -10,7 +12,12 @@ import {
 } from '../db'
 import type { Look, LookExport, Place, Settings } from '../types'
 import { normalizeFeedback } from '../types'
-import { base64ToBlob, blobToBase64, prepareLookImages } from './media'
+import {
+  base64ToBlob,
+  blobToBase64,
+  compressCloudThumb,
+  prepareLookImages,
+} from './media'
 
 export type BackupPayload = {
   version: 1
@@ -28,7 +35,7 @@ function placeForBackup(place?: Place): Place | undefined {
   }
 }
 
-/** Settings fields safe to put in a shareable / gist JSON (no PAT). */
+/** Settings fields safe to put in a shareable / cloud JSON (no PAT). */
 export function settingsForBackup(settings: Settings): Settings {
   return {
     placeName: settings.placeName,
@@ -37,6 +44,7 @@ export function settingsForBackup(settings: Settings): Settings {
     cityConfirmed: settings.cityConfirmed,
     homePlace: placeForBackup(settings.homePlace),
     travelPlace: placeForBackup(settings.travelPlace),
+    githubRepoFullName: settings.githubRepoFullName,
     githubGistId: settings.githubGistId,
     githubAutoBackup: settings.githubAutoBackup,
     lastBackupAt: settings.lastBackupAt,
@@ -53,10 +61,13 @@ export type ImportResult = {
 
 export type BackupBuildOptions = {
   /**
-   * thumbs — compact (gist / auto). full — larger file export.
-   * Default thumbs to avoid OOM / gist limits.
+   * none — meta only (GitHub default).
+   * thumb — tiny previews (optional GitHub / everyday file).
+   * full — full photos (file export only).
    */
-  photo?: 'thumb' | 'full'
+  photo?: 'none' | 'thumb' | 'full'
+  /** Recompress thumbs for cloud size (GitHub optional previews). */
+  cloudThumb?: boolean
 }
 
 /**
@@ -73,24 +84,42 @@ export async function buildBackup(
   const exported: LookExport[] = []
 
   for (const look of looks) {
+    if (photoKind === 'none') {
+      exported.push({ ...look, photoKind: 'none' })
+      await new Promise((r) => setTimeout(r, 0))
+      continue
+    }
+
     let photoBlob: Blob | null = null
     if (photoKind === 'thumb') {
       photoBlob = await getLookThumbBlob(look.id)
+      if (!photoBlob) {
+        const row = await getLookPhoto(look.id)
+        photoBlob = row?.blob ?? row?.thumbBlob ?? null
+      }
+      if (photoBlob && options.cloudThumb) {
+        photoBlob = await compressCloudThumb(photoBlob)
+      }
     } else {
       photoBlob = await getLookFullBlob(look.id)
+      if (!photoBlob) {
+        const row = await getLookPhoto(look.id)
+        photoBlob = row?.blob ?? row?.thumbBlob ?? null
+      }
     }
+
     if (!photoBlob) {
-      const row = await getLookPhoto(look.id)
-      photoBlob = row?.blob ?? row?.thumbBlob ?? null
+      // Keep meta even without a photo (placeholder on restore)
+      exported.push({ ...look, photoKind: 'none' })
+      await new Promise((r) => setTimeout(r, 0))
+      continue
     }
-    if (!photoBlob) continue
 
     exported.push({
       ...look,
       photoBase64: await blobToBase64(photoBlob),
       photoKind,
     })
-    // Yield so UI stays responsive on large archives
     await new Promise((r) => setTimeout(r, 0))
   }
 
@@ -100,6 +129,17 @@ export async function buildBackup(
     settings: settingsForBackup(settings),
     looks: exported,
   }
+}
+
+/** UTF-8 byte length of a JSON backup (close to upload size). */
+export function backupJsonBytes(payload: BackupPayload): number {
+  return new TextEncoder().encode(JSON.stringify(payload)).length
+}
+
+export async function estimateBackupBytes(
+  options: BackupBuildOptions = {},
+): Promise<number> {
+  return backupJsonBytes(await buildBackup(options))
 }
 
 async function downloadJson(text: string, filename: string): Promise<void> {
@@ -122,7 +162,7 @@ async function downloadJson(text: string, filename: string): Promise<void> {
   URL.revokeObjectURL(url)
 }
 
-/** Compact copy (thumbs) — safe for cloud / everyday. */
+/** Compact file copy (device thumbs) — for Файлы, not GitHub. */
 export async function shareOrDownloadBackup(): Promise<void> {
   const payload = await buildBackup({ photo: 'thumb' })
   const text = JSON.stringify(payload)
@@ -147,11 +187,40 @@ export async function importBackupPayload(
     throw new Error('Неверный формат бэкапа')
   }
 
-  const looks: Array<Look & { photoBlob: Blob; thumbBlob?: Blob }> = []
+  const withPhotos: Array<Look & { photoBlob: Blob; thumbBlob?: Blob }> = []
+  let metaOnlyCount = 0
 
   for (const item of data.looks) {
-    const { photoBase64, photoKind: _kind, ...rest } = item
+    const { photoBase64, photoKind, ...rest } = item
+    const meta: Look = {
+      ...rest,
+      feedback: normalizeFeedback(rest.feedback),
+      favorite: rest.favorite === true ? true : undefined,
+    }
+
+    if (!photoBase64) {
+      await upsertLookMeta(meta)
+      metaOnlyCount += 1
+      await new Promise((r) => setTimeout(r, 0))
+      continue
+    }
+
     const raw = base64ToBlob(photoBase64)
+    const existing = await getLookPhoto(meta.id)
+
+    if (existing?.blob && photoKind === 'thumb') {
+      // Keep local full photo; refresh list thumb from cloud preview
+      await upsertLookMeta(meta)
+      try {
+        await upsertLookThumb(meta.id, raw)
+      } catch {
+        // leave existing photo
+      }
+      metaOnlyCount += 1
+      await new Promise((r) => setTimeout(r, 0))
+      continue
+    }
+
     let photoBlob = raw
     let thumbBlob: Blob | undefined
     try {
@@ -161,24 +230,30 @@ export async function importBackupPayload(
     } catch {
       thumbBlob = raw
     }
-    looks.push({
-      ...rest,
-      feedback: normalizeFeedback(rest.feedback),
-      favorite: rest.favorite === true ? true : undefined,
+    withPhotos.push({
+      ...meta,
       photoBlob,
       thumbBlob,
     })
     await new Promise((r) => setTimeout(r, 0))
   }
 
+  let imported = metaOnlyCount
+  if (withPhotos.length > 0) {
+    const result = await mergeLooks(withPhotos)
+    imported += result.imported
+  }
+
   const current = await getSettings()
-  const { imported, total } = await mergeLooks(looks)
+  const total = await countLooks()
   if (data.settings) {
     const fromBackup = settingsForBackup(data.settings)
     await saveSettings({
       ...current,
       ...fromBackup,
       githubToken: current.githubToken,
+      githubRepoFullName:
+        data.settings.githubRepoFullName || current.githubRepoFullName,
       githubGistId: data.settings.githubGistId || current.githubGistId,
       homePlace: fromBackup.homePlace ?? current.homePlace,
     })

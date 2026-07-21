@@ -22,9 +22,11 @@ vi.mock('../db', () => ({
 
 vi.mock('./githubBackup', () => ({
   saveBackupToGithub: vi.fn(async () => ({
-    gistId: 'gist123',
-    recompressed: false,
-    bytes: 100,
+    repoFullName: 'user/look-weather-data',
+    photosUploaded: 1,
+    photosSkipped: 0,
+    looksTotal: 1,
+    bytesUploaded: 1000,
   })),
 }))
 

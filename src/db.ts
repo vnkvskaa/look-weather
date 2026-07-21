@@ -185,6 +185,29 @@ export async function addLook(
   })
 }
 
+/** Write look metadata without touching the photos table. */
+export async function upsertLookMeta(look: Look): Promise<void> {
+  await ensureDbReady()
+  await db.looks.put(metaOnly(look))
+}
+
+/**
+ * Set / refresh thumb. If there is no photo row yet, store the blob as both
+ * full and thumb (placeholder until a full photo is imported).
+ */
+export async function upsertLookThumb(
+  lookId: string,
+  thumbBlob: Blob,
+): Promise<void> {
+  await ensureDbReady()
+  const existing = await db.photos.get(lookId)
+  if (!existing) {
+    await db.photos.put({ lookId, blob: thumbBlob, thumbBlob })
+    return
+  }
+  await db.photos.update(lookId, { thumbBlob })
+}
+
 export async function updateLookFeedback(
   id: string,
   feedback: Look['feedback'],

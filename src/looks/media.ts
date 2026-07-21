@@ -18,8 +18,12 @@ export type PhotoMeta = PhotoTakenAt & {
 
 /** Main photo stored locally — aggressive enough for hundreds of looks. */
 export const PHOTO_MAIN = { maxSide: 1024, quality: 0.72 } as const
-/** List / archive / gist thumbs. */
+/** List / archive thumbs on device. */
 export const PHOTO_THUMB = { maxSide: 360, quality: 0.7 } as const
+/** Optional GitHub preview — tiny, recompressed on upload. */
+export const PHOTO_CLOUD_THUMB = { maxSide: 220, quality: 0.55 } as const
+/** Soft cap per look thumb before base64 (~80–100KB binary). */
+export const CLOUD_THUMB_MAX_BYTES = 96 * 1024
 
 function pad(n: number) {
   return String(n).padStart(2, '0')
@@ -162,6 +166,22 @@ export async function prepareLookImages(
   } finally {
     bitmap.close()
   }
+}
+
+/**
+ * Recompress for optional GitHub previews. Returns null if still too large.
+ */
+export async function compressCloudThumb(source: Blob): Promise<Blob | null> {
+  let blob = await compressImage(
+    source,
+    PHOTO_CLOUD_THUMB.maxSide,
+    PHOTO_CLOUD_THUMB.quality,
+  )
+  if (blob.size > CLOUD_THUMB_MAX_BYTES) {
+    blob = await compressImage(source, 160, 0.45)
+  }
+  if (blob.size > CLOUD_THUMB_MAX_BYTES) return null
+  return blob
 }
 
 export function blobToObjectUrl(blob: Blob): string {

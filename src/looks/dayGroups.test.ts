@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  filterDayGroupsByTempBucket,
   formatMonthChip,
   formatMonthHeader,
   groupDayGroupsByMonth,
@@ -9,6 +10,7 @@ import {
   pickPrimaryLook,
   placeSummary,
   sortDayGroupsByFeelsLike,
+  TEMP_BUCKETS,
 } from './dayGroups'
 import type { Look, WeatherProfile } from '../types'
 
@@ -143,5 +145,75 @@ describe('sortDayGroupsByFeelsLike', () => {
     ])
     const sorted = sortDayGroupsByFeelsLike(groups)
     expect(sorted.map((g) => g.primary.id)).toEqual(['cold', 'mid', 'warm'])
+  })
+})
+
+describe('filterDayGroupsByTempBucket', () => {
+  const groups = () =>
+    groupLooksByDate([
+      look({
+        id: 'freeze',
+        date: '2026-01-10',
+        weather: weather({ date: '2026-01-10', feelsLike: -3 }),
+      }),
+      look({
+        id: 'cool',
+        date: '2026-04-01',
+        weather: weather({ date: '2026-04-01', feelsLike: 7 }),
+      }),
+      look({
+        id: 'mild',
+        date: '2026-05-01',
+        weather: weather({ date: '2026-05-01', feelsLike: 12 }),
+      }),
+      look({
+        id: 'warm',
+        date: '2026-07-10',
+        weather: weather({ date: '2026-07-10', feelsLike: 22 }),
+      }),
+      look({
+        id: 'hot',
+        date: '2026-08-01',
+        weather: weather({ date: '2026-08-01', feelsLike: 28 }),
+      }),
+    ])
+
+  it('all leaves groups unchanged', () => {
+    expect(filterDayGroupsByTempBucket(groups(), 'all')).toHaveLength(5)
+  })
+
+  it('filters by primary feelsLike bucket edges', () => {
+    expect(
+      filterDayGroupsByTempBucket(groups(), 'lt0').map((g) => g.primary.id),
+    ).toEqual(['freeze'])
+    expect(
+      filterDayGroupsByTempBucket(groups(), '5-10').map((g) => g.primary.id),
+    ).toEqual(['cool'])
+    expect(
+      filterDayGroupsByTempBucket(groups(), '10-15').map((g) => g.primary.id),
+    ).toEqual(['mild'])
+    expect(
+      filterDayGroupsByTempBucket(groups(), '20-25').map((g) => g.primary.id),
+    ).toEqual(['warm'])
+    expect(
+      filterDayGroupsByTempBucket(groups(), 'gt25').map((g) => g.primary.id),
+    ).toEqual(['hot'])
+  })
+
+  it('includes bucket boundary on the lower side', () => {
+    const edge = groupLooksByDate([
+      look({
+        id: 'edge',
+        date: '2026-06-01',
+        weather: weather({ date: '2026-06-01', feelsLike: 15 }),
+      }),
+    ])
+    expect(filterDayGroupsByTempBucket(edge, '15-20')).toHaveLength(1)
+    expect(filterDayGroupsByTempBucket(edge, '10-15')).toHaveLength(0)
+  })
+
+  it('exposes Russian chip labels', () => {
+    expect(TEMP_BUCKETS[0].label).toBe('все')
+    expect(TEMP_BUCKETS.some((b) => b.label === '0–5°')).toBe(true)
   })
 })

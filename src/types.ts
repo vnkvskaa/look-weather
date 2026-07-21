@@ -93,9 +93,9 @@ export type LookPhoto = {
 }
 
 export type LookExport = Omit<Look, never> & {
-  photoBase64: string
-  /** What was encoded — gist/auto use thumbs; full file export may use full. */
-  photoKind?: 'thumb' | 'full'
+  photoBase64?: string
+  /** thumb — compact file export; full — full photos in file export */
+  photoKind?: 'none' | 'thumb' | 'full'
 }
 
 export type Settings = Place & {
@@ -107,10 +107,15 @@ export type Settings = Place & {
   travelPlace?: Place
   /** GitHub PAT — only in IndexedDB, never in public repo or shared backup JSON */
   githubToken?: string
-  /** Private gist id for cloud backup */
+  /**
+   * Private backup repo full name, e.g. `user/look-weather-data`.
+   * New saves go here (photos as separate files).
+   */
+  githubRepoFullName?: string
+  /** Legacy private gist id — restore only */
   githubGistId?: string
   /**
-   * Auto-upload to the same private gist after look changes.
+   * Auto-upload to the private backup repo after look changes.
    * Default ON when a token is saved (`undefined` / missing ≈ on).
    */
   githubAutoBackup?: boolean
