@@ -184,6 +184,54 @@ function useLooks() {
   return { looks, refresh }
 }
 
+function PhotoLightbox({
+  lookId,
+  alt,
+  onClose,
+}: {
+  lookId: string
+  alt: string
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [onClose])
+
+  return (
+    <div
+      className="photo-lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label={alt || 'фото лука'}
+      onClick={onClose}
+    >
+      <button
+        type="button"
+        className="photo-lightbox-close"
+        onClick={onClose}
+        aria-label="закрыть"
+      >
+        закрыть
+      </button>
+      <div
+        className="photo-lightbox-frame"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Photo lookId={lookId} alt={alt} variant="full" />
+      </div>
+    </div>
+  )
+}
+
 function Photo({
   lookId,
   alt,
@@ -444,22 +492,28 @@ function DayPhotoStrip({
 }) {
   const active = looks.find((l) => l.id === activeId) ?? looks[0]
   const multi = looks.length > 1
+  const [lightbox, setLightbox] = useState(false)
+  const alt = `Лук ${active.date}${active.time ? ` ${active.time}` : ''}`
 
   return (
     <div className={multi ? 'day-media' : undefined}>
-      <div className="look-thumb">
-        <Photo
-          lookId={active.id}
-          alt={`Лук ${active.date}${active.time ? ` ${active.time}` : ''}`}
-          variant="full"
-        />
+      <button
+        type="button"
+        className="look-thumb look-thumb-open"
+        onClick={() => setLightbox(true)}
+        aria-label="открыть фото крупнее"
+      >
+        <Photo lookId={active.id} alt={alt} variant="full" />
         {badge ? <span className="match-badge">{badge}</span> : null}
         {favorite ? (
           <span className="favorite-mark" aria-hidden>
             ★
           </span>
         ) : null}
-      </div>
+        <span className="look-thumb-hint" aria-hidden>
+          нажми · крупнее
+        </span>
+      </button>
       {multi ? (
         <div className="day-thumbs" role="tablist" aria-label="фото за день">
           {looks.map((look) => (
@@ -477,6 +531,13 @@ function DayPhotoStrip({
             </button>
           ))}
         </div>
+      ) : null}
+      {lightbox ? (
+        <PhotoLightbox
+          lookId={active.id}
+          alt={alt}
+          onClose={() => setLightbox(false)}
+        />
       ) : null}
     </div>
   )
@@ -1446,7 +1507,11 @@ function AddLookScreen({
         <h2 className="block-title">в этой одежде было?</h2>
         <div className="form-stack">
           <div className="photo-drop corner has-photo">
-            <Photo lookId={pendingFeedback.id} alt="Сохранённый лук" variant="full" />
+            <Photo
+              lookId={pendingFeedback.id}
+              alt="Сохранённый лук"
+              variant="full"
+            />
           </div>
           <p className="status">
             {formatDateRu(pendingFeedback.date, pendingFeedback.time)} ·{' '}
