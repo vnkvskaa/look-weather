@@ -14,10 +14,23 @@ type DailyBlock = {
 
 type ForecastResponse = {
   daily: DailyBlock
+  hourly?: HourlyBlock
 }
 
 type ArchiveResponse = {
   daily: DailyBlock
+  hourly?: HourlyBlock
+}
+
+type HourlyBlock = {
+  time: string[]
+  temperature_2m?: number[]
+  apparent_temperature?: number[]
+  relative_humidity_2m?: number[]
+  precipitation?: number[]
+  precipitation_probability?: number[]
+  cloud_cover?: number[]
+  wind_speed_10m?: number[]
 }
 
 type GeocodeResult = {
@@ -53,8 +66,63 @@ function toProfile(daily: DailyBlock, index: number): WeatherProfile {
   }
 }
 
+function closestHourIndex(times: string[], date: string, time: string): number {
+  const target = `${date}T${time}`
+  let best = 0
+  let bestDiff = Infinity
+  for (let i = 0; i < times.length; i++) {
+    const t = times[i]
+    if (!t.startsWith(date)) continue
+    const diff = Math.abs(
+      new Date(t).getTime() - new Date(target.length === 16 ? `${target}:00` : target).getTime(),
+    )
+    if (diff < bestDiff) {
+      bestDiff = diff
+      best = i
+    }
+  }
+  return best
+}
+
+function applyHourly(
+  base: WeatherProfile,
+  hourly: HourlyBlock | undefined,
+  date: string,
+  time?: string,
+): WeatherProfile {
+  if (!hourly?.time?.length || !time) return base
+  const i = closestHourIndex(hourly.time, date, time)
+  const feels = hourly.apparent_temperature?.[i]
+  const temp = hourly.temperature_2m?.[i]
+  const wind = hourly.wind_speed_10m?.[i]
+  const humidity = hourly.relative_humidity_2m?.[i]
+  const cloud = hourly.cloud_cover?.[i]
+  const precipHour = hourly.precipitation?.[i]
+  const precipProb = hourly.precipitation_probability?.[i]
+
+  return {
+    ...base,
+    feelsLike:
+      feels != null ? Math.round(feels * 10) / 10 : base.feelsLike,
+    tempMean: temp != null ? Math.round(temp * 10) / 10 : base.tempMean,
+    windMs: wind != null ? Math.round(wind * 10) / 10 : base.windMs,
+    humidity: humidity != null ? Math.round(humidity) : base.humidity,
+    cloudCover: cloud != null ? Math.round(cloud) : base.cloudCover,
+    precipProb:
+      precipProb != null ? Math.round(precipProb) : base.precipProb,
+    // keep daily precipMm as day total; bump label signal if hour is wet
+    precipMm:
+      precipHour != null && precipHour > base.precipMm
+        ? Math.round(precipHour * 10) / 10
+        : base.precipMm,
+  }
+}
+
 const DAILY =
   'temperature_2m_mean,apparent_temperature_mean,apparent_temperature_max,wind_speed_10m_max,precipitation_sum,precipitation_probability_max,cloud_cover_mean,relative_humidity_2m_mean'
+
+const HOURLY =
+  'temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,precipitation_probability,cloud_cover,wind_speed_10m'
 
 export async function searchPlaces(query: string) {
   const url = new URL('https://geocoding-api.open-meteo.com/v1/search')
@@ -76,6 +144,7 @@ export async function fetchWeatherForDate(
   latitude: number,
   longitude: number,
   date: string,
+  time?: string,
 ): Promise<WeatherProfile> {
   const today = new Date()
   const todayStr = today.toISOString().slice(0, 10)
@@ -85,23 +154,23 @@ export async function fetchWeatherForDate(
       (1000 * 60 * 60 * 24),
   )
 
-  // Forecast covers ~16 days ahead and a bit of recent past via forecast API;
-  // older days go to archive.
   if (diffDays >= -5 && diffDays <= 14) {
-    return fetchForecastDay(latitude, longitude, date)
+    return fetchForecastDay(latitude, longitude, date, time)
   }
-  return fetchArchiveDay(latitude, longitude, date)
+  return fetchArchiveDay(latitude, longitude, date, time)
 }
 
 async function fetchForecastDay(
   latitude: number,
   longitude: number,
   date: string,
+  time?: string,
 ): Promise<WeatherProfile> {
   const url = new URL('https://api.open-meteo.com/v1/forecast')
   url.searchParams.set('latitude', String(latitude))
   url.searchParams.set('longitude', String(longitude))
   url.searchParams.set('daily', DAILY)
+  url.searchParams.set('hourly', HOURLY)
   url.searchParams.set('timezone', 'auto')
   url.searchParams.set('forecast_days', '16')
   url.searchParams.set('past_days', '5')
@@ -112,16 +181,16 @@ async function fetchForecastDay(
   const data = (await res.json()) as ForecastResponse
   const idx = data.daily.time.indexOf(date)
   if (idx < 0) {
-    // fall back to archive if date missing from window
-    return fetchArchiveDay(latitude, longitude, date)
+    return fetchArchiveDay(latitude, longitude, date, time)
   }
-  return toProfile(data.daily, idx)
+  return applyHourly(toProfile(data.daily, idx), data.hourly, date, time)
 }
 
 async function fetchArchiveDay(
   latitude: number,
   longitude: number,
   date: string,
+  time?: string,
 ): Promise<WeatherProfile> {
   const url = new URL('https://archive-api.open-meteo.com/v1/archive')
   url.searchParams.set('latitude', String(latitude))
@@ -132,6 +201,10 @@ async function fetchArchiveDay(
     'daily',
     'temperature_2m_mean,apparent_temperature_mean,apparent_temperature_max,wind_speed_10m_max,precipitation_sum,cloud_cover_mean,relative_humidity_2m_mean',
   )
+  url.searchParams.set(
+    'hourly',
+    'temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,cloud_cover,wind_speed_10m',
+  )
   url.searchParams.set('timezone', 'auto')
   url.searchParams.set('wind_speed_unit', 'ms')
 
@@ -139,8 +212,10 @@ async function fetchArchiveDay(
   if (!res.ok) throw new Error('Не удалось загрузить архив погоды')
   const data = (await res.json()) as ArchiveResponse
   if (!data.daily?.time?.length) throw new Error('Нет данных за этот день')
-  const profile = toProfile(data.daily, 0)
-  profile.precipProb = profile.precipMm > 0.2 ? 80 : 10
+  const profile = applyHourly(toProfile(data.daily, 0), data.hourly, date, time)
+  if (profile.precipProb === 0) {
+    profile.precipProb = profile.precipMm > 0.2 ? 80 : 10
+  }
   return profile
 }
 

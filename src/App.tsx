@@ -8,7 +8,7 @@ import {
   updateLookFeedback,
 } from './db'
 import { importBackupFile, shareOrDownloadBackup } from './looks/backup'
-import { compressImage, blobToObjectUrl } from './looks/media'
+import { compressImage, blobToObjectUrl, extractPhotoTakenAt } from './looks/media'
 import { rankLooks } from './looks/recommend'
 import type { Feedback, Look, Settings, Tab, WeatherProfile } from './types'
 import {
@@ -25,12 +25,13 @@ function todayISO() {
   return local.toISOString().slice(0, 10)
 }
 
-function formatDateRu(iso: string) {
+function formatDateRu(iso: string, time?: string) {
   const d = new Date(iso + 'T12:00:00')
-  return d.toLocaleDateString('ru-RU', {
+  const day = d.toLocaleDateString('ru-RU', {
     day: 'numeric',
     month: 'long',
   })
+  return time ? `${day}, ${time}` : day
 }
 
 function useLooks() {
@@ -197,7 +198,7 @@ function TodayScreen({
             </div>
             <div className="look-meta">
               <div>
-                <h3>{formatDateRu(look.date)}</h3>
+                <h3>{formatDateRu(look.date, look.time)}</h3>
                 <p>{reason}</p>
               </div>
               <span className="badge">~{Math.round(effectiveWarmth)}°</span>
@@ -221,6 +222,11 @@ function AddLookScreen({
   onSaved: () => void
 }) {
   const [date, setDate] = useState(todayISO)
+  const [time, setTime] = useState('')
+  const [takenAt, setTakenAt] = useState<string | undefined>()
+  const [metaSource, setMetaSource] = useState<
+    'exif' | 'file' | 'now' | null
+  >(null)
   const [note, setNote] = useState('')
   const [preview, setPreview] = useState<string | null>(null)
   const [blob, setBlob] = useState<Blob | null>(null)
@@ -231,7 +237,12 @@ function AddLookScreen({
 
   useEffect(() => {
     let cancelled = false
-    fetchWeatherForDate(settings.latitude, settings.longitude, date)
+    fetchWeatherForDate(
+      settings.latitude,
+      settings.longitude,
+      date,
+      time || undefined,
+    )
       .then((w) => {
         if (!cancelled) setWeather(w)
       })
@@ -241,7 +252,7 @@ function AddLookScreen({
     return () => {
       cancelled = true
     }
-  }, [date, settings.latitude, settings.longitude])
+  }, [date, time, settings.latitude, settings.longitude])
 
   useEffect(() => {
     return () => {
@@ -252,13 +263,26 @@ function AddLookScreen({
   async function onFile(file: File | undefined) {
     if (!file) return
     setError(null)
-    setStatus('сжимаю фото…')
+    setStatus('читаю метаданные…')
     try {
+      const meta = await extractPhotoTakenAt(file)
+      setDate(meta.date)
+      setTime(meta.time)
+      setTakenAt(meta.takenAt)
+      setMetaSource(meta.source)
+
+      setStatus('сжимаю фото…')
       const compressed = await compressImage(file)
       if (preview) URL.revokeObjectURL(preview)
       setBlob(compressed)
       setPreview(URL.createObjectURL(compressed))
-      setStatus(null)
+      setStatus(
+        meta.source === 'exif'
+          ? `дата с фото: ${meta.date} ${meta.time}`
+          : meta.source === 'file'
+            ? `дата файла: ${meta.date} ${meta.time} (EXIF не найден)`
+            : null,
+      )
     } catch {
       setError('Не удалось обработать фото')
       setStatus(null)
@@ -277,6 +301,8 @@ function AddLookScreen({
         id: crypto.randomUUID(),
         createdAt: Date.now(),
         date,
+        time: time || undefined,
+        takenAt,
         note: note.trim() || undefined,
         photoBlob: blob,
         weather,
@@ -284,6 +310,9 @@ function AddLookScreen({
       await addLook(look)
       setNote('')
       setBlob(null)
+      setTime('')
+      setTakenAt(undefined)
+      setMetaSource(null)
       if (preview) URL.revokeObjectURL(preview)
       setPreview(null)
       setStatus('сохранено')
@@ -326,18 +355,47 @@ function AddLookScreen({
           </label>
         </div>
         <div className="field">
-          <label htmlFor="look-date">дата</label>
+          <label htmlFor="look-date">
+            дата
+            {metaSource === 'exif'
+              ? ' · из фото'
+              : metaSource === 'file'
+                ? ' · из файла'
+                : ''}
+          </label>
           <input
             id="look-date"
             type="date"
             value={date}
-            onChange={(e) => setDate(e.target.value)}
+            onChange={(e) => {
+              setDate(e.target.value)
+              setMetaSource(null)
+            }}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="look-time">
+            время
+            {metaSource === 'exif'
+              ? ' · из фото'
+              : metaSource === 'file'
+                ? ' · из файла'
+                : ''}
+          </label>
+          <input
+            id="look-time"
+            type="time"
+            value={time}
+            onChange={(e) => {
+              setTime(e.target.value)
+              setMetaSource(null)
+            }}
           />
         </div>
         {weather && (
           <p className="status">
-            погода дня: {weatherLabel(weather)} · ветер {weather.windMs} м/с ·
-            влажн. {weather.humidity}%
+            погода{time ? ` в ${time}` : ' дня'}: {weatherLabel(weather)} ·
+            ветер {weather.windMs} м/с · влажн. {weather.humidity}%
           </p>
         )}
         <div className="field">
@@ -388,7 +446,7 @@ function ArchiveScreen({
             </div>
             <div className="look-meta">
               <div>
-                <h3>{formatDateRu(look.date)}</h3>
+                <h3>{formatDateRu(look.date, look.time)}</h3>
                 <p>
                   {weatherLabel(look.weather)}
                   {look.note ? ` · ${look.note}` : ''}

@@ -15,6 +15,10 @@ export type Look = {
   id: string
   createdAt: number
   date: string
+  /** Local time from photo EXIF, HH:mm */
+  time?: string
+  /** ISO-ish local timestamp from photo metadata */
+  takenAt?: string
   note?: string
   photoBlob: Blob
   weather: WeatherProfile

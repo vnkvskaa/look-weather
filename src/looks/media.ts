@@ -1,3 +1,57 @@
+import exifr from 'exifr'
+
+export type PhotoTakenAt = {
+  date: string
+  time: string
+  takenAt: string
+  source: 'exif' | 'file' | 'now'
+}
+
+function pad(n: number) {
+  return String(n).padStart(2, '0')
+}
+
+function fromDate(d: Date, source: PhotoTakenAt['source']): PhotoTakenAt {
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return {
+    date,
+    time,
+    takenAt: `${date}T${time}:00`,
+    source,
+  }
+}
+
+/** Read capture date/time from EXIF; fall back to file mtime, then now. */
+export async function extractPhotoTakenAt(file: File): Promise<PhotoTakenAt> {
+  try {
+    const tags = await exifr.parse(file, {
+      pick: [
+        'DateTimeOriginal',
+        'CreateDate',
+        'DateTimeDigitized',
+        'ModifyDate',
+      ],
+    })
+    const raw =
+      tags?.DateTimeOriginal ??
+      tags?.CreateDate ??
+      tags?.DateTimeDigitized ??
+      tags?.ModifyDate
+    if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
+      return fromDate(raw, 'exif')
+    }
+  } catch {
+    // ignore and fall through
+  }
+
+  if (file.lastModified) {
+    return fromDate(new Date(file.lastModified), 'file')
+  }
+
+  return fromDate(new Date(), 'now')
+}
+
 export async function compressImage(
   file: File,
   maxSide = 1280,
