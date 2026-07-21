@@ -278,39 +278,6 @@ describe('rankLooks', () => {
     expect(ranked[0].reason).toMatch(/защит/)
   })
 
-  it('boosts look with слой tag when target is wet', () => {
-    const target = weather({
-      date: '2026-07-21',
-      feelsLike: 12,
-      precipMm: 3,
-      precipProb: 80,
-    })
-    const plain = look({
-      id: 'plain',
-      date: '2026-06-01',
-      weather: weather({
-        date: '2026-06-01',
-        feelsLike: 14,
-        precipMm: 2,
-        precipProb: 70,
-      }),
-    })
-    const layered = look({
-      id: 'layered',
-      date: '2026-05-01',
-      items: ['слой'],
-      weather: weather({
-        date: '2026-05-01',
-        feelsLike: 14,
-        precipMm: 2,
-        precipProb: 70,
-      }),
-    })
-    const ranked = rankLooks([plain, layered], target, 2)
-    expect(ranked[0].look.id).toBe('layered')
-    expect(ranked[0].score).toBeLessThan(ranked[1].score)
-  })
-
   it('looksNeedingFeedback returns recent looks without feedback', () => {
     const today = new Date()
     const pad = (n: number) => String(n).padStart(2, '0')

@@ -40,9 +40,8 @@ export function normalizeFeedback(raw: unknown): Feedback | undefined {
 
 export type LocationSource = 'photo' | 'settings' | 'search' | 'geo'
 
+/** Legacy wardrobe chips — kept for old backups / IndexedDB only. */
 export type ItemTag = 'верх' | 'низ' | 'слой' | 'обувь' | 'другое'
-
-export const ITEM_TAGS: ItemTag[] = ['верх', 'низ', 'слой', 'обувь', 'другое']
 
 export type Place = {
   placeName: string
@@ -70,7 +69,7 @@ export type Look = {
   /** ISO-ish local timestamp from photo metadata */
   takenAt?: string
   note?: string
-  /** Clothing parts — chips on add / cards */
+  /** Legacy — no longer collected in UI; preserved on import */
   items?: ItemTag[]
   photoBlob: Blob
   weather: WeatherProfile

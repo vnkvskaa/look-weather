@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  formatMonthChip,
+  formatMonthHeader,
+  groupDayGroupsByMonth,
   groupLooksByDate,
+  listMonthsFromLooks,
+  monthKey,
   pickPrimaryLook,
   placeSummary,
 } from './dayGroups'
@@ -79,5 +84,40 @@ describe('groupLooksByDate', () => {
     })
     const group = groupLooksByDate([a, b], '09:00')[0]
     expect(placeSummary(group)).toBe('2 места')
+  })
+})
+
+describe('month helpers', () => {
+  it('monthKey takes YYYY-MM', () => {
+    expect(monthKey('2026-07-21')).toBe('2026-07')
+  })
+
+  it('formatMonthChip / header are Russian', () => {
+    expect(formatMonthChip('2026-07')).toMatch(/2026/)
+    expect(formatMonthChip('2026-07').toLowerCase()).toMatch(/июл/)
+    expect(formatMonthHeader('2026-07').toLowerCase()).toMatch(/июл/)
+  })
+
+  it('listMonthsFromLooks newest first', () => {
+    const looks = [
+      look({ id: 'a', date: '2026-05-01' }),
+      look({ id: 'b', date: '2026-07-10' }),
+      look({ id: 'c', date: '2026-07-02' }),
+    ]
+    expect(listMonthsFromLooks(looks)).toEqual(['2026-07', '2026-05'])
+  })
+
+  it('groupDayGroupsByMonth keeps day groups under months', () => {
+    const groups = groupLooksByDate([
+      look({ id: 'a', date: '2026-07-10' }),
+      look({ id: 'b', date: '2026-06-01' }),
+      look({ id: 'c', date: '2026-07-02' }),
+    ])
+    const sections = groupDayGroupsByMonth(groups)
+    expect(sections.map((s) => s.month)).toEqual(['2026-07', '2026-06'])
+    expect(sections[0].groups.map((g) => g.date)).toEqual([
+      '2026-07-10',
+      '2026-07-02',
+    ])
   })
 })

@@ -118,3 +118,51 @@ export function weatherSummaryBits(group: DayGroup): {
     count: group.looks.length,
   }
 }
+
+/** YYYY-MM from look date. */
+export function monthKey(date: string): string {
+  return date.slice(0, 7)
+}
+
+/** Chip label: «июл 2026». */
+export function formatMonthChip(ym: string): string {
+  const [y, m] = ym.split('-').map(Number)
+  if (!y || !m) return ym
+  const d = new Date(y, m - 1, 15)
+  const month = d
+    .toLocaleDateString('ru-RU', { month: 'short' })
+    .replace(/\./g, '')
+    .trim()
+  return `${month} ${y}`
+}
+
+/** Sticky header: «июль 2026». */
+export function formatMonthHeader(ym: string): string {
+  const [y, m] = ym.split('-').map(Number)
+  if (!y || !m) return ym
+  const d = new Date(y, m - 1, 15)
+  const month = d.toLocaleDateString('ru-RU', { month: 'long' })
+  return `${month} ${y}`
+}
+
+/** Unique months from looks, newest first. */
+export function listMonthsFromLooks(looks: Look[]): string[] {
+  const set = new Set(looks.map((l) => monthKey(l.date)))
+  return [...set].sort((a, b) => b.localeCompare(a))
+}
+
+/** Day groups bucketed by month (newest months first; groups stay date-desc). */
+export function groupDayGroupsByMonth(
+  groups: DayGroup[],
+): Array<{ month: string; groups: DayGroup[] }> {
+  const byMonth = new Map<string, DayGroup[]>()
+  for (const group of groups) {
+    const key = monthKey(group.date)
+    const list = byMonth.get(key) ?? []
+    list.push(group)
+    byMonth.set(key, list)
+  }
+  return [...byMonth.keys()]
+    .sort((a, b) => b.localeCompare(a))
+    .map((month) => ({ month, groups: byMonth.get(month)! }))
+}

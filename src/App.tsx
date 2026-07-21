@@ -45,7 +45,11 @@ import {
   revokeLookObjectUrl,
 } from './looks/media'
 import {
+  formatMonthChip,
+  formatMonthHeader,
+  groupDayGroupsByMonth,
   groupLooksByDate,
+  listMonthsFromLooks,
 } from './looks/dayGroups'
 import {
   looksNeedingFeedback,
@@ -55,7 +59,6 @@ import {
 import type {
   DayGroup,
   Feedback,
-  ItemTag,
   LocationSource,
   Look,
   Place,
@@ -63,7 +66,7 @@ import type {
   Tab,
   WeatherProfile,
 } from './types'
-import { FEEDBACK_STEPS, ITEM_TAGS } from './types'
+import { FEEDBACK_STEPS } from './types'
 import {
   fetchWeatherForDate,
   formatFeels,
@@ -317,54 +320,6 @@ function FavoriteButton({
   )
 }
 
-function ItemTagsPicker({
-  value,
-  onChange,
-}: {
-  value: ItemTag[]
-  onChange: (next: ItemTag[]) => void
-}) {
-  function toggle(tag: ItemTag) {
-    if (value.includes(tag)) {
-      onChange(value.filter((t) => t !== tag))
-    } else {
-      onChange([...value, tag])
-    }
-  }
-  return (
-    <div className="item-tags">
-      <p className="item-tags-label">слои</p>
-      <p className="item-tags-hint">
-        «Слой» — куртка или дождевик. В дождь такие луки поднимаю выше.
-      </p>
-      <div className="item-tags-row">
-        {ITEM_TAGS.map((tag) => (
-          <button
-            key={tag}
-            type="button"
-            className="tag-chip"
-            data-active={value.includes(tag)}
-            onClick={() => toggle(tag)}
-          >
-            {tag}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function ItemTagsDisplay({ items }: { items?: ItemTag[] }) {
-  if (!items?.length) return null
-  return (
-    <div className="item-tags-display">
-      {items.map((tag) => (
-        <span key={tag}>{tag}</span>
-      ))}
-    </div>
-  )
-}
-
 const PWA_HINT_KEY = 'look-weather-pwa-hint-dismissed'
 
 function isIosSafari(): boolean {
@@ -528,7 +483,6 @@ function DayLookCard({
           {formatFeels(active.weather.feelsLike)}
         </p>
         {reason ? <p className="look-reason">{reason}</p> : null}
-        <ItemTagsDisplay items={active.items} />
         <FeedbackBar
           value={active.feedback}
           note={active.feedbackNote}
@@ -1108,7 +1062,6 @@ function AddLookScreen({
     source: 'settings',
   })
   const [note, setNote] = useState('')
-  const [items, setItems] = useState<ItemTag[]>([])
   const [preview, setPreview] = useState<string | null>(null)
   const [blob, setBlob] = useState<Blob | null>(null)
   const [weather, setWeather] = useState<WeatherProfile | null>(null)
@@ -1215,7 +1168,6 @@ function AddLookScreen({
         time: time || undefined,
         takenAt,
         note: note.trim() || undefined,
-        items: items.length ? items : undefined,
         photoBlob: blob,
         weather,
         placeName: place.placeName,
@@ -1226,7 +1178,6 @@ function AddLookScreen({
       await addLook(look)
       scheduleAutoBackup('look')
       setNote('')
-      setItems([])
       setBlob(null)
       setTime('')
       setTakenAt(undefined)
@@ -1368,7 +1319,6 @@ function AddLookScreen({
           </div>
         </div>
         <LocationEditor place={place} onChange={setPlace} />
-        <ItemTagsPicker value={items} onChange={setItems} />
         {weather && (
           <p className="weather-line">
             погода{time ? ` в ${time}` : ''} · {weatherLabel(weather)}
@@ -1425,13 +1375,34 @@ function ArchiveScreen({
   const [locBusy, setLocBusy] = useState(false)
   const [locError, setLocError] = useState<string | null>(null)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
+  const [monthFilter, setMonthFilter] = useState<string | null>(null)
 
-  const filtered = useMemo(
+  const pool = useMemo(
     () => (favoritesOnly ? looks.filter((l) => l.favorite) : looks),
     [looks, favoritesOnly],
   )
+  const months = useMemo(() => listMonthsFromLooks(pool), [pool])
+
+  useEffect(() => {
+    if (monthFilter && !months.includes(monthFilter)) {
+      setMonthFilter(null)
+    }
+  }, [months, monthFilter])
+
+  const filtered = useMemo(
+    () =>
+      monthFilter
+        ? pool.filter((l) => l.date.startsWith(monthFilter))
+        : pool,
+    [pool, monthFilter],
+  )
   const dayGroups = useMemo(() => groupLooksByDate(filtered), [filtered])
+  const monthSections = useMemo(
+    () => groupDayGroupsByMonth(dayGroups),
+    [dayGroups],
+  )
   const hasFavorites = looks.some((l) => l.favorite)
+  const showMonthNav = months.length > 1
 
   async function applyPlace(look: Look, next: PlaceState) {
     setLocBusy(true)
@@ -1460,22 +1431,131 @@ function ArchiveScreen({
     }
   }
 
+  function renderCardActions(active: Look) {
+    const place: PlaceState = {
+      placeName: active.placeName || settings.placeName,
+      latitude: active.latitude ?? settings.latitude,
+      longitude: active.longitude ?? settings.longitude,
+      source: active.locationSource ?? 'settings',
+    }
+    return (
+      <>
+        {editingId === active.id ? (
+          <>
+            <LocationEditor
+              place={place}
+              compact
+              onChange={(next) => void applyPlace(active, next)}
+            />
+            {locBusy && (
+              <p className="status loading-pulse">обновляю погоду…</p>
+            )}
+            {locError && <p className="error">{locError}</p>}
+            <button
+              type="button"
+              className="text-btn"
+              onClick={() => setEditingId(null)}
+            >
+              готово
+            </button>
+          </>
+        ) : (
+          <div className="card-actions">
+            <button
+              type="button"
+              className="text-btn"
+              onClick={() => {
+                setEditingId(active.id)
+                setLocError(null)
+              }}
+            >
+              место
+            </button>
+            {pendingDelete === active.id ? null : (
+              <button
+                type="button"
+                className="text-btn"
+                onClick={() => setPendingDelete(active.id)}
+              >
+                удалить
+              </button>
+            )}
+          </div>
+        )}
+        {pendingDelete === active.id && (
+          <div className="confirm-bar">
+            <p>удалить это фото?</p>
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={() => setPendingDelete(null)}
+            >
+              отмена
+            </button>
+            <button
+              type="button"
+              className="solid-btn"
+              onClick={() => {
+                onDelete(active.id)
+                setPendingDelete(null)
+              }}
+            >
+              удалить
+            </button>
+          </div>
+        )}
+      </>
+    )
+  }
+
   return (
     <>
       <div className="section-kicker">архив</div>
       <h2 className="block-title">все луки</h2>
-      {hasFavorites && (
-        <div className="control-row filter-row">
-          <button
-            type="button"
-            className="ghost-btn"
-            data-active={favoritesOnly}
-            onClick={() => setFavoritesOnly((v) => !v)}
-          >
-            только ★
-          </button>
+
+      {(showMonthNav || hasFavorites) && looks.length > 0 && (
+        <div className="archive-nav">
+          {showMonthNav && (
+            <div className="archive-months" role="navigation" aria-label="месяцы">
+              {monthFilter ? (
+                <button
+                  type="button"
+                  className="ghost-btn archive-month-chip"
+                  onClick={() => setMonthFilter(null)}
+                >
+                  все месяцы
+                </button>
+              ) : null}
+              {months.map((ym) => (
+                <button
+                  key={ym}
+                  type="button"
+                  className="ghost-btn archive-month-chip"
+                  data-active={monthFilter === ym}
+                  onClick={() =>
+                    setMonthFilter((cur) => (cur === ym ? null : ym))
+                  }
+                >
+                  {formatMonthChip(ym)}
+                </button>
+              ))}
+            </div>
+          )}
+          {hasFavorites && (
+            <div className="control-row filter-row archive-fav-row">
+              <button
+                type="button"
+                className="ghost-btn"
+                data-active={favoritesOnly}
+                onClick={() => setFavoritesOnly((v) => !v)}
+              >
+                только ★
+              </button>
+            </div>
+          )}
         </div>
       )}
+
       {looks.length === 0 && (
         <div className="empty-actions">
           <p className="empty">Пока пусто — добавь первый лук.</p>
@@ -1485,96 +1565,34 @@ function ArchiveScreen({
         </div>
       )}
       {looks.length > 0 && dayGroups.length === 0 && (
-        <p className="empty">В избранном пусто — отметь ★ на карточке.</p>
+        <p className="empty">
+          {favoritesOnly
+            ? 'В избранном пусто — отметь ★ на карточке.'
+            : 'В этом месяце пусто.'}
+        </p>
       )}
-      <div className="look-grid archive-grid">
-        {dayGroups.map((group) => (
-          <DayLookCard
-            key={group.date}
-            group={group}
-            badge={formatFeels(group.primary.weather.feelsLike)}
-            onFeedback={onFeedback}
-            onFeedbackNote={onFeedbackNote}
-            onFavorite={onFavorite}
-            actions={(active) => {
-              const place: PlaceState = {
-                placeName: active.placeName || settings.placeName,
-                latitude: active.latitude ?? settings.latitude,
-                longitude: active.longitude ?? settings.longitude,
-                source: active.locationSource ?? 'settings',
-              }
-              return (
-                <>
-                  {editingId === active.id ? (
-                    <>
-                      <LocationEditor
-                        place={place}
-                        compact
-                        onChange={(next) => void applyPlace(active, next)}
-                      />
-                      {locBusy && (
-                        <p className="status loading-pulse">
-                          обновляю погоду…
-                        </p>
-                      )}
-                      {locError && <p className="error">{locError}</p>}
-                      <button
-                        type="button"
-                        className="text-btn"
-                        onClick={() => setEditingId(null)}
-                      >
-                        готово
-                      </button>
-                    </>
-                  ) : (
-                    <div className="card-actions">
-                      <button
-                        type="button"
-                        className="text-btn"
-                        onClick={() => {
-                          setEditingId(active.id)
-                          setLocError(null)
-                        }}
-                      >
-                        место
-                      </button>
-                      {pendingDelete === active.id ? null : (
-                        <button
-                          type="button"
-                          className="text-btn"
-                          onClick={() => setPendingDelete(active.id)}
-                        >
-                          удалить
-                        </button>
-                      )}
-                    </div>
-                  )}
-                  {pendingDelete === active.id && (
-                    <div className="confirm-bar">
-                      <p>удалить это фото?</p>
-                      <button
-                        type="button"
-                        className="ghost-btn"
-                        onClick={() => setPendingDelete(null)}
-                      >
-                        отмена
-                      </button>
-                      <button
-                        type="button"
-                        className="solid-btn"
-                        onClick={() => {
-                          onDelete(active.id)
-                          setPendingDelete(null)
-                        }}
-                      >
-                        удалить
-                      </button>
-                    </div>
-                  )}
-                </>
-              )
-            }}
-          />
+
+      <div
+        className="archive-list"
+        data-has-nav={showMonthNav || hasFavorites ? 'true' : 'false'}
+      >
+        {monthSections.map(({ month, groups }) => (
+          <section key={month} className="archive-month-section">
+            <h3 className="archive-month-sticky">{formatMonthHeader(month)}</h3>
+            <div className="look-grid archive-grid">
+              {groups.map((group) => (
+                <DayLookCard
+                  key={group.date}
+                  group={group}
+                  badge={formatFeels(group.primary.weather.feelsLike)}
+                  onFeedback={onFeedback}
+                  onFeedbackNote={onFeedbackNote}
+                  onFavorite={onFavorite}
+                  actions={renderCardActions}
+                />
+              ))}
+            </div>
+          </section>
         ))}
       </div>
     </>

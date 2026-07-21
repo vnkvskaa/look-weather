@@ -23,9 +23,6 @@ const FEEDBACK_SHIFT: Record<Feedback, number> = {
   hot: -5,
 }
 
-/** Light boost when rainy target and look tagged «слой». */
-const LAYER_WET_BONUS = 1.4
-
 /**
  * Mild favorite boost — only when already weather-similar.
  * Cap keeps a starred bad match from beating a clearly better day.
@@ -74,10 +71,6 @@ function precipMismatch(target: WeatherProfile, look: WeatherProfile): number {
   return isWet(target) === isWet(look) ? 0 : 1
 }
 
-function hasLayer(look: Look): boolean {
-  return look.items?.includes('слой') ?? false
-}
-
 /** Lower distance = better weather match. Not related to date/createdAt. */
 export function weatherDistance(
   target: WeatherProfile,
@@ -97,10 +90,6 @@ export function weatherDistance(
     humidDiff / 18 +
     cloudDiff / 30 +
     precip * 6
-
-  if (isWet(target) && hasLayer(look)) {
-    distance = Math.max(0, distance - LAYER_WET_BONUS)
-  }
 
   // Favorite: mild nudge only among already similar weather.
   if (look.favorite && distance <= FAVORITE_SIMILAR_MAX) {
@@ -124,12 +113,7 @@ function buildReason(
   _pct: number,
 ): string {
   if (precipMismatch(target, look.weather) && isWet(target)) {
-    return hasLayer(look)
-      ? 'похоже · тогда был слой от дождя'
-      : 'похоже · возьми защиту от дождя'
-  }
-  if (isWet(target) && hasLayer(look)) {
-    return 'похоже · есть защита от дождя'
+    return 'похоже · возьми защиту от дождя'
   }
   if (isWet(target)) {
     return rainAdvice(target) ?? 'похоже · возьми защиту от дождя'
