@@ -14,9 +14,11 @@ describe('settingsForBackup', () => {
       ...base,
       githubToken: 'ghp_secret',
       githubGistId: 'abc123',
+      githubAutoBackup: true,
     })
     expect(out.githubToken).toBeUndefined()
     expect(out.githubGistId).toBe('abc123')
+    expect(out.githubAutoBackup).toBe(true)
   })
 })
 

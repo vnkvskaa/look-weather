@@ -17,6 +17,7 @@ export function settingsForBackup(settings: Settings): Settings {
     longitude: settings.longitude,
     cityConfirmed: settings.cityConfirmed,
     githubGistId: settings.githubGistId,
+    githubAutoBackup: settings.githubAutoBackup,
     lastBackupAt: settings.lastBackupAt,
     looksCountAtBackup: settings.looksCountAtBackup,
     backupReminderDismissedAt: settings.backupReminderDismissedAt,

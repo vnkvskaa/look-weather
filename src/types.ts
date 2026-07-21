@@ -50,6 +50,11 @@ export type Settings = Place & {
   githubToken?: string
   /** Private gist id for cloud backup */
   githubGistId?: string
+  /**
+   * Auto-upload to the same private gist after look changes.
+   * Default ON when a token is saved (`undefined` / missing ≈ on).
+   */
+  githubAutoBackup?: boolean
   /** Last successful GitHub / file backup timestamp */
   lastBackupAt?: number
   /** Looks count at last backup — for soft «пора бэкапнуть» */

@@ -999,6 +999,64 @@ img {
   gap: 12px;
 }
 
+.auto-backup-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 4px 0 2px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.auto-backup-row input {
+  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--olive);
+  flex: 0 0 auto;
+}
+
+.auto-backup-row span {
+  display: grid;
+  gap: 2px;
+}
+
+.auto-backup-row .field-hint {
+  margin: 0;
+}
+
+.auto-backup-row:has(input:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.backup-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 40;
+  margin: 0;
+  max-width: min(92vw, 360px);
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  background: rgba(250, 248, 242, 0.94);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--olive-mid);
+  text-align: center;
+  pointer-events: none;
+}
+
+.backup-toast.is-error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+}
+
 .soft-nudge > p {
   margin: 0;
   font-family: var(--font-serif);

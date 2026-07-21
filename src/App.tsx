@@ -15,6 +15,14 @@ import {
   markBackupDone,
 } from './looks/backup'
 import {
+  getAutoBackupStatus,
+  isAutoBackupEnabled,
+  scheduleAutoBackup,
+  subscribeAutoBackup,
+  suppressAutoBackup,
+  type AutoBackupStatus,
+} from './looks/autoBackup'
+import {
   restoreBackupFromGithub,
   saveBackupToGithub,
 } from './looks/githubBackup'
@@ -790,6 +798,7 @@ function AddLookScreen({
         locationSource: place.source,
       }
       await addLook(look)
+      scheduleAutoBackup('look')
       setNote('')
       setBlob(null)
       setTime('')
@@ -987,6 +996,7 @@ function ArchiveScreen({
         locationSource: next.source,
         weather,
       })
+      scheduleAutoBackup('place')
       setEditingId(null)
       onUpdated()
     } catch (e) {
@@ -1141,22 +1151,39 @@ function SettingsScreen({
     }
     await saveSettings(saved)
     onSettings(saved)
+    scheduleAutoBackup('settings')
     setStatus(`город: ${next.placeName}`)
     setError(null)
   }
 
   async function saveToken() {
+    const trimmed = token.trim()
     const next: Settings = {
       ...settings,
-      githubToken: token.trim() || undefined,
+      githubToken: trimmed || undefined,
+      // First time a token is saved — автобэкап on by default
+      githubAutoBackup: trimmed
+        ? (settings.githubAutoBackup ?? true)
+        : settings.githubAutoBackup,
     }
     await saveSettings(next)
     onSettings(next)
     setStatus(
-      token.trim()
+      trimmed
         ? 'токен сохранён на этом телефоне'
         : 'токен удалён с телефона',
     )
+    setError(null)
+  }
+
+  async function setAutoBackup(on: boolean) {
+    const next: Settings = {
+      ...settings,
+      githubAutoBackup: on,
+    }
+    await saveSettings(next)
+    onSettings(next)
+    setStatus(on ? 'автобэкап включён' : 'автобэкап выключен')
     setError(null)
   }
 
@@ -1177,6 +1204,7 @@ function SettingsScreen({
     setError(null)
     try {
       const n = await importBackupFile(file)
+      suppressAutoBackup()
       setStatus(`импортировано луков: ${n}`)
       window.location.reload()
     } catch (e) {
@@ -1214,6 +1242,7 @@ function SettingsScreen({
         await saveSettings({ ...settings, githubToken: token.trim() })
       }
       const n = await restoreBackupFromGithub()
+      suppressAutoBackup()
       setStatus(`восстановлено луков: ${n}`)
       window.location.reload()
     } catch (e) {
@@ -1222,6 +1251,8 @@ function SettingsScreen({
       setBusy(false)
     }
   }
+
+  const autoOn = isAutoBackupEnabled(settings)
 
   return (
     <>
@@ -1271,6 +1302,22 @@ function SettingsScreen({
         >
           сохранить токен
         </button>
+        <label className="auto-backup-row">
+          <input
+            type="checkbox"
+            checked={autoOn}
+            disabled={!settings.githubToken?.trim()}
+            onChange={(e) => void setAutoBackup(e.target.checked)}
+          />
+          <span>
+            автобэкап
+            <span className="field-hint">
+              {settings.githubToken?.trim()
+                ? 'После новых луков и правок — в тот же Gist, в фоне.'
+                : 'Сначала сохрани токен.'}
+            </span>
+          </span>
+        </label>
         <div className="settings-actions">
           <button
             type="button"
@@ -1313,17 +1360,35 @@ function SettingsScreen({
   )
 }
 
+function autoBackupToastText(status: AutoBackupStatus): string | null {
+  if (status.kind === 'saving') return 'бэкап…'
+  if (status.kind === 'ok') return status.message
+  if (status.kind === 'error') return status.message
+  return null
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>('today')
   const [settings, setSettings] = useState<Settings | null>(null)
+  const [autoStatus, setAutoStatus] = useState(getAutoBackupStatus)
   const { looks, refresh } = useLooks()
 
   useEffect(() => {
     void getSettings().then(setSettings)
   }, [])
 
+  useEffect(() => {
+    return subscribeAutoBackup((status) => {
+      setAutoStatus(status)
+      if (status.kind === 'ok') {
+        void getSettings().then(setSettings)
+      }
+    })
+  }, [])
+
   async function onFeedback(id: string, feedback: Feedback) {
     await updateLookFeedback(id, feedback)
+    scheduleAutoBackup('feedback')
     await refresh()
   }
 
@@ -1347,6 +1412,7 @@ export default function App() {
   }
 
   const needsCity = !settings.cityConfirmed
+  const backupToast = autoBackupToastText(autoStatus)
 
   return (
     <div className="app">
@@ -1397,6 +1463,19 @@ export default function App() {
           />
         )}
       </div>
+
+      {backupToast && (
+        <p
+          className={
+            autoStatus.kind === 'error'
+              ? 'backup-toast is-error'
+              : 'backup-toast'
+          }
+          aria-live="polite"
+        >
+          {backupToast}
+        </p>
+      )}
 
       <nav className="nav" aria-label="Навигация">
         {(
