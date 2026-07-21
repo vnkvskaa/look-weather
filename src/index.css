@@ -1796,6 +1796,13 @@ img {
   color: var(--ink-soft) !important;
 }
 
+.backup-banner-body {
+  font-family: var(--font-serif) !important;
+  font-size: 16px !important;
+  line-height: 1.4 !important;
+  color: var(--ink) !important;
+}
+
 .backup-banner .olive-btn,
 .backup-banner .ghost-btn {
   justify-self: start;

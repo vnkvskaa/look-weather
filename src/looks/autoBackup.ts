@@ -1,5 +1,9 @@
 import { getSettings } from '../db'
-import { saveBackupToGithub } from './githubBackup'
+import {
+  isGithubAccessError,
+  needsNewGithubKey,
+  saveBackupToGithub,
+} from './githubBackup'
 
 /** Min gap between auto uploads when many changes fire quickly. */
 export const AUTO_BACKUP_MIN_INTERVAL_MS = 45_000
@@ -15,7 +19,7 @@ export type AutoBackupStatus =
   | { kind: 'pending' }
   | { kind: 'saving' }
   | { kind: 'ok'; message: string }
-  | { kind: 'error'; message: string }
+  | { kind: 'error'; message: string; accessDenied?: boolean }
 
 type Listener = (status: AutoBackupStatus) => void
 
@@ -78,8 +82,15 @@ function isSuppressed(): boolean {
 export function isAutoBackupEnabled(settings: {
   githubToken?: string
   githubAutoBackup?: boolean
+  githubGistId?: string
+  githubRepoFullName?: string
+  githubRepoTokenValidatedAt?: number
+  backupSetupStep?: 'need-new-key' | 'ready'
 }): boolean {
-  return Boolean(settings.githubToken?.trim()) && settings.githubAutoBackup !== false
+  if (!settings.githubToken?.trim()) return false
+  if (settings.githubAutoBackup === false) return false
+  if (needsNewGithubKey(settings)) return false
+  return true
 }
 
 /**
@@ -148,9 +159,11 @@ async function runAutoBackup(): Promise<void> {
       if (current.kind === 'ok') notify({ kind: 'idle' })
     }, 4_000)
   } catch (e) {
+    const message = (e as Error).message || 'не удалось сохранить копию'
     notify({
       kind: 'error',
-      message: (e as Error).message || 'не удалось сохранить копию',
+      message,
+      accessDenied: isGithubAccessError(message),
     })
   } finally {
     inFlight = false

@@ -24,9 +24,19 @@ import {
 } from './backup'
 
 export const DEFAULT_BACKUP_REPO = 'look-weather-data'
+export const GITHUB_TOKEN_CREATE_URL =
+  'https://github.com/settings/tokens/new?scopes=repo&description=look-weather'
+
+export const NEED_NEW_KEY_TITLE = 'Нужен новый ключ'
+export const NEED_NEW_KEY_BODY =
+  'Старый ключ умел только старую копию; для фото в закрытой папке на GitHub сделай новый ключ и поставь галочку repo (доступ к закрытым репозиториям). Старый можно удалить.'
+
 const META_LOOKS_PATH = 'meta/looks.json'
 const META_SETTINGS_PATH = 'meta/settings.json'
 const GIST_FILENAME = 'look-weather-backup.json'
+
+const REPO_SCOPE_HINT =
+  'В ключе нужна галочка repo (доступ к закрытым репозиториям). Создай новый ключ и вставь сюда.'
 
 type GistFile = { content?: string; filename?: string; raw_url?: string; truncated?: boolean }
 type GistResponse = {
@@ -102,11 +112,86 @@ async function apiJson<T>(
 
 export type TokenCheckResult = {
   login: string
+  /** Private backup repo opened or created during validation */
+  repoFullName: string
 }
 
-/** Lightweight PAT check — GET /user. Throws with plain Russian errors. */
+/**
+ * True when settings still look like gist-era or the PAT was never proven
+ * for private repo access. Blocks «готово» / autobackup until re-validated.
+ */
+export function needsNewGithubKey(settings: {
+  githubToken?: string
+  githubGistId?: string
+  githubRepoFullName?: string
+  githubRepoTokenValidatedAt?: number
+  backupSetupStep?: 'need-new-key' | 'ready'
+}): boolean {
+  if (settings.githubRepoTokenValidatedAt) return false
+  if (settings.backupSetupStep === 'need-new-key') return true
+
+  const token = Boolean(settings.githubToken?.trim())
+  const gist = Boolean(settings.githubGistId?.trim())
+  const repo = Boolean(settings.githubRepoFullName?.trim())
+
+  if (gist) return true
+  if (token && !repo) return true
+  return false
+}
+
+/** 401 / 403 / 404 (or Russian scope errors) — show «Нужен новый ключ». */
+export function isGithubAccessError(message: string): boolean {
+  const m = message.toLowerCase()
+  if (/\b(401|403|404)\b/.test(m)) return true
+  if (m.includes('ключ не подошёл')) return true
+  if (m.includes('нет доступа')) return true
+  if (m.includes('галочка repo')) return true
+  if (m.includes('нужна галочка')) return true
+  if (m.includes('не удалось создать папку')) return true
+  if (m.includes('не удалось создать закрытый')) return true
+  return false
+}
+
+/**
+ * Persist migration gate for gist-era / unvalidated tokens.
+ * Idempotent — safe to call on every settings load.
+ */
+export async function ensureBackupMigration(
+  settings: Settings,
+): Promise<Settings> {
+  if (!needsNewGithubKey(settings)) {
+    if (
+      settings.backupSetupStep === 'need-new-key' &&
+      settings.githubRepoTokenValidatedAt
+    ) {
+      const next: Settings = { ...settings, backupSetupStep: 'ready' }
+      await saveSettings(next)
+      return next
+    }
+    return settings
+  }
+  if (
+    settings.backupSetupStep === 'need-new-key' &&
+    !settings.githubBackupVerifiedAt
+  ) {
+    return settings
+  }
+  const next: Settings = {
+    ...settings,
+    backupSetupStep: 'need-new-key',
+    githubBackupVerifiedAt: undefined,
+  }
+  await saveSettings(next)
+  return next
+}
+
+/**
+ * Prove PAT works: GET /user, then create/open private look-weather-data.
+ * Rejects gist-only tokens with a clear Russian error.
+ */
 export async function validateGithubToken(
   token: string,
+  options: { repoName?: string } = {},
 ): Promise<TokenCheckResult> {
   const trimmed = token.trim()
   if (!trimmed) {
@@ -133,7 +218,10 @@ export async function validateGithubToken(
   if (!data.login) {
     throw new Error('Ключ не подошёл')
   }
-  return { login: data.login }
+
+  const repoName = options.repoName?.trim() || DEFAULT_BACKUP_REPO
+  const repoFullName = await ensurePrivateRepo(trimmed, data.login, repoName)
+  return { login: data.login, repoFullName }
 }
 
 async function ensurePrivateRepo(
@@ -150,9 +238,7 @@ async function ensurePrivateRepo(
   }
   if (get.status !== 404) {
     if (get.status === 401 || get.status === 403) {
-      throw new Error(
-        'Нет доступа к репозиторию. В ключе нужна галочка repo (или Contents на этот репозиторий).',
-      )
+      throw new Error(REPO_SCOPE_HINT)
     }
     throw new Error(
       get.data.message || `Не удалось открыть репозиторий (${get.status})`,
@@ -174,9 +260,7 @@ async function ensurePrivateRepo(
   )
   if (!created.ok || !created.data.full_name) {
     if (created.status === 401 || created.status === 403) {
-      throw new Error(
-        'Не удалось создать папку на GitHub. В ключе нужна галочка repo.',
-      )
+      throw new Error(REPO_SCOPE_HINT)
     }
     if (created.status === 422) {
       // Race: created elsewhere
@@ -212,6 +296,9 @@ async function getRepoFile(
   )
   if (status === 404) return null
   if (!ok) {
+    if (status === 401 || status === 403) {
+      throw new Error(REPO_SCOPE_HINT)
+    }
     throw new Error(
       data.message || `Не удалось прочитать ${path} (${status})`,
     )
@@ -255,9 +342,7 @@ async function putRepoFile(
 
   if (!ok) {
     if (status === 401 || status === 403) {
-      throw new Error(
-        'Ключ не даёт писать в репозиторий. Нужна галочка repo.',
-      )
+      throw new Error(REPO_SCOPE_HINT)
     }
     if (status === 409 || status === 422) {
       // sha mismatch — refetch and retry once
@@ -369,7 +454,8 @@ export type GithubBackupResult = {
 }
 
 /**
- * Confirm token works and backup repo (or legacy gist) is reachable.
+ * Confirm token works and private backup repo is reachable.
+ * Does not treat a legacy gist as a valid configured copy.
  */
 export async function verifyGithubBackup(): Promise<{
   login: string
@@ -381,44 +467,33 @@ export async function verifyGithubBackup(): Promise<{
   if (!token) {
     throw new Error('Сначала сохрани ключ')
   }
-  const { login } = await validateGithubToken(token)
+  const { login, repoFullName } = await validateGithubToken(token)
   let hasCopy = false
-  let repoFullName = settings.githubRepoFullName?.trim()
 
-  if (repoFullName) {
-    const { owner, repo } = parseRepoFullName(repoFullName)
-    const res = await apiJson<ContentFile>(
-      `https://api.github.com/repos/${owner}/${repo}/contents/${META_LOOKS_PATH}`,
-      token,
-    )
-    if (res.status === 404) {
-      throw new Error(
-        'Папка на GitHub есть, но копии ещё нет. Нажми «сохранить сейчас».',
-      )
+  const { owner, repo } = parseRepoFullName(repoFullName)
+  const res = await apiJson<ContentFile>(
+    `https://api.github.com/repos/${owner}/${repo}/contents/${META_LOOKS_PATH}`,
+    token,
+  )
+  if (res.status === 404) {
+    // Repo exists, first copy not written yet
+    hasCopy = false
+  } else if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(REPO_SCOPE_HINT)
     }
-    if (!res.ok) {
-      throw new Error(`Не удалось проверить копию (${res.status})`)
-    }
-    hasCopy = true
-  } else if (settings.githubGistId?.trim()) {
-    const gistId = settings.githubGistId.trim()
-    const res = await fetch(`https://api.github.com/gists/${gistId}`, {
-      headers: authHeaders(token),
-    })
-    if (res.status === 404) {
-      throw new Error(
-        'Старая копия (gist) не найдена. Сохрани заново — появится закрытый репозиторий.',
-      )
-    }
-    if (!res.ok) {
-      throw new Error(`Не удалось проверить старую копию (${res.status})`)
-    }
+    throw new Error(`Не удалось проверить копию (${res.status})`)
+  } else {
     hasCopy = true
   }
 
   await saveSettings({
     ...settings,
+    githubRepoFullName: repoFullName,
+    githubRepoTokenValidatedAt: Date.now(),
     githubBackupVerifiedAt: Date.now(),
+    backupSetupStep: 'ready',
+    githubGistId: undefined,
   })
   return { login, hasCopy, repoFullName }
 }
@@ -441,12 +516,13 @@ export async function saveBackupToGithub(
     message: 'открываю папку на GitHub…',
   })
 
-  const { login } = await validateGithubToken(token)
-  const repoName =
-    options.repoName?.trim() ||
-    settings.githubRepoFullName?.split('/')[1] ||
-    DEFAULT_BACKUP_REPO
-  const repoFullName = await ensurePrivateRepo(token, login, repoName)
+  const { repoFullName: validatedRepo } = await validateGithubToken(token, {
+    repoName:
+      options.repoName?.trim() ||
+      settings.githubRepoFullName?.split('/')[1] ||
+      DEFAULT_BACKUP_REPO,
+  })
+  const repoFullName = validatedRepo
   const { owner, repo } = parseRepoFullName(repoFullName)
 
   const looks = await listLooksMeta()
@@ -592,8 +668,10 @@ export async function saveBackupToGithub(
     ...next,
     githubToken: settings.githubToken,
     githubRepoFullName: repoFullName,
-    // keep legacy gist id for one-shot restore
-    githubGistId: settings.githubGistId,
+    githubRepoTokenValidatedAt: Date.now(),
+    backupSetupStep: 'ready',
+    // New saves ignore legacy gist — clear so UI stops treating it as active
+    githubGistId: undefined,
   })
 
   onProgress?.({
@@ -716,7 +794,10 @@ async function restoreFromRepo(
       ...fromBackup,
       githubToken: current.githubToken,
       githubRepoFullName: repoFullName,
-      githubGistId: current.githubGistId,
+      githubRepoTokenValidatedAt:
+        current.githubRepoTokenValidatedAt ?? Date.now(),
+      backupSetupStep: 'ready',
+      githubGistId: undefined,
       homePlace: fromBackup.homePlace ?? current.homePlace,
     })
   }

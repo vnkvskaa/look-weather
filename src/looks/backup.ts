@@ -45,12 +45,14 @@ export function settingsForBackup(settings: Settings): Settings {
     homePlace: placeForBackup(settings.homePlace),
     travelPlace: placeForBackup(settings.travelPlace),
     githubRepoFullName: settings.githubRepoFullName,
-    githubGistId: settings.githubGistId,
+    // Do not carry legacy gist ids into new backups
     githubAutoBackup: settings.githubAutoBackup,
     lastBackupAt: settings.lastBackupAt,
     looksCountAtBackup: settings.looksCountAtBackup,
     backupReminderDismissedAt: settings.backupReminderDismissedAt,
     githubBackupVerifiedAt: settings.githubBackupVerifiedAt,
+    githubRepoTokenValidatedAt: settings.githubRepoTokenValidatedAt,
+    backupSetupStep: settings.backupSetupStep,
   }
 }
 
@@ -254,7 +256,10 @@ export async function importBackupPayload(
       githubToken: current.githubToken,
       githubRepoFullName:
         data.settings.githubRepoFullName || current.githubRepoFullName,
-      githubGistId: data.settings.githubGistId || current.githubGistId,
+      // Ignore imported gist ids — new copies use the private repo only
+      githubGistId: current.githubGistId,
+      githubRepoTokenValidatedAt: current.githubRepoTokenValidatedAt,
+      backupSetupStep: current.backupSetupStep,
       homePlace: fromBackup.homePlace ?? current.homePlace,
     })
   }

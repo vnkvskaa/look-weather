@@ -16,38 +16,64 @@ vi.mock('../db', () => ({
     latitude: 55.75,
     longitude: 37.62,
     githubToken: 'ghp_test',
+    githubRepoFullName: 'user/look-weather-data',
+    githubRepoTokenValidatedAt: Date.now(),
+    backupSetupStep: 'ready' as const,
     githubAutoBackup: true,
   })),
 }))
 
-vi.mock('./githubBackup', () => ({
-  saveBackupToGithub: vi.fn(async () => ({
-    repoFullName: 'user/look-weather-data',
-    photosUploaded: 1,
-    photosSkipped: 0,
-    looksTotal: 1,
-    bytesUploaded: 1000,
-  })),
-}))
+vi.mock('./githubBackup', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./githubBackup')>()
+  return {
+    ...actual,
+    saveBackupToGithub: vi.fn(async () => ({
+      repoFullName: 'user/look-weather-data',
+      photosUploaded: 1,
+      photosSkipped: 0,
+      looksTotal: 1,
+      bytesUploaded: 1000,
+    })),
+  }
+})
 
 import { getSettings } from '../db'
 import { saveBackupToGithub } from './githubBackup'
 
 describe('isAutoBackupEnabled', () => {
-  it('is on by default when token exists', () => {
+  it('is on by default when token is repo-validated', () => {
     expect(
-      isAutoBackupEnabled({ githubToken: 'ghp_x', githubAutoBackup: undefined }),
+      isAutoBackupEnabled({
+        githubToken: 'ghp_x',
+        githubRepoFullName: 'u/look-weather-data',
+        githubRepoTokenValidatedAt: 1,
+        githubAutoBackup: undefined,
+      }),
     ).toBe(true)
   })
 
   it('respects explicit off', () => {
     expect(
-      isAutoBackupEnabled({ githubToken: 'ghp_x', githubAutoBackup: false }),
+      isAutoBackupEnabled({
+        githubToken: 'ghp_x',
+        githubRepoTokenValidatedAt: 1,
+        githubAutoBackup: false,
+      }),
     ).toBe(false)
   })
 
   it('skips without token', () => {
     expect(isAutoBackupEnabled({ githubAutoBackup: true })).toBe(false)
+  })
+
+  it('skips gist-era token that needs a new key', () => {
+    expect(
+      isAutoBackupEnabled({
+        githubToken: 'ghp_old',
+        githubGistId: 'abc',
+        githubAutoBackup: true,
+      }),
+    ).toBe(false)
   })
 })
 
@@ -108,6 +134,9 @@ describe('scheduleAutoBackup', () => {
       latitude: 55.75,
       longitude: 37.62,
       githubToken: 'ghp_test',
+      githubRepoFullName: 'user/look-weather-data',
+      githubRepoTokenValidatedAt: Date.now(),
+      backupSetupStep: 'ready',
       githubAutoBackup: false,
     })
     scheduleAutoBackup('look')

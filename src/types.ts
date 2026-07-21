@@ -112,7 +112,10 @@ export type Settings = Place & {
    * New saves go here (photos as separate files).
    */
   githubRepoFullName?: string
-  /** Legacy private gist id — restore only */
+  /**
+   * Legacy private gist id — one-shot restore only; ignored for new saves.
+   * Cleared after a successful repo-scoped token validation / repo save.
+   */
   githubGistId?: string
   /**
    * Auto-upload to the private backup repo after look changes.
@@ -127,6 +130,15 @@ export type Settings = Place & {
   backupReminderDismissedAt?: number
   /** Last successful «проверить» / token+copy ping */
   githubBackupVerifiedAt?: number
+  /**
+   * When the saved PAT was proven to access private `look-weather-data`
+   * (GET /user + create/open repo). Missing = gist-era / never repo-validated.
+   */
+  githubRepoTokenValidatedAt?: number
+  /**
+   * Backup setup gate. `need-new-key` until a repo-scoped token is validated.
+   */
+  backupSetupStep?: 'need-new-key' | 'ready'
 }
 
 export type Tab = 'today' | 'add' | 'archive' | 'settings'

@@ -38,7 +38,13 @@ import {
   type AutoBackupStatus,
 } from './looks/autoBackup'
 import {
+  GITHUB_TOKEN_CREATE_URL,
+  NEED_NEW_KEY_BODY,
+  NEED_NEW_KEY_TITLE,
+  ensureBackupMigration,
   githubSaveStatusMessage,
+  isGithubAccessError,
+  needsNewGithubKey,
   planGithubBackup,
   restoreBackupFromGithub,
   saveBackupToGithub,
@@ -1929,20 +1935,26 @@ type BackupChecks = {
 
 function backupChecks(settings: Settings): BackupChecks {
   const token = Boolean(settings.githubToken?.trim())
+  const repoReady = Boolean(
+    settings.githubRepoTokenValidatedAt ||
+      (settings.githubRepoFullName?.trim() &&
+        settings.backupSetupStep !== 'need-new-key' &&
+        !settings.githubGistId?.trim()),
+  )
   return {
     account: token || Boolean(settings.githubBackupVerifiedAt),
-    token,
+    token: token && !needsNewGithubKey(settings),
     auto: isAutoBackupEnabled(settings),
     copy: Boolean(
-      settings.githubRepoFullName?.trim() ||
-        settings.githubGistId?.trim() ||
-        settings.lastBackupAt,
+      settings.githubRepoFullName?.trim() &&
+        (settings.lastBackupAt || settings.githubBackupVerifiedAt),
     ),
-    verified: Boolean(settings.githubBackupVerifiedAt),
+    verified: Boolean(settings.githubBackupVerifiedAt) && repoReady,
   }
 }
 
-function nextBackupGap(checks: BackupChecks): string | null {
+function nextBackupGap(checks: BackupChecks, needsKey: boolean): string | null {
+  if (needsKey) return 'новый ключ с правом repo'
   if (!checks.token) return 'сохранить ключ'
   if (!checks.copy) return 'сохранить первую копию'
   if (!checks.auto) return 'включить автосохранение'
@@ -1955,17 +1967,23 @@ function BackupPanel({
   onSettings,
   openWizard,
   autoError,
+  autoAccessDenied = false,
 }: {
   settings: Settings
   onSettings: (s: Settings) => void
   openWizard: boolean
   autoError?: string | null
+  autoAccessDenied?: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
+  const needsKey =
+    needsNewGithubKey(settings) ||
+    autoAccessDenied ||
+    (Boolean(autoError) && isGithubAccessError(autoError ?? ''))
   const checks = backupChecks(settings)
-  const gap = nextBackupGap(checks)
-  const setupDone = checks.token && checks.copy && checks.auto
-  const hasCopy = checks.token && checks.copy
+  const gap = nextBackupGap(checks, needsKey)
+  const setupDone = !needsKey && checks.token && checks.copy && checks.auto
+  const hasCopy = !needsKey && checks.token && checks.copy
   const autoOn = settings.githubAutoBackup !== false
   const [wizard, setWizard] = useState(false)
   const [step, setStep] = useState(1)
@@ -1982,18 +2000,20 @@ function BackupPanel({
   }, [settings.githubToken])
 
   useEffect(() => {
-    if (!openWizard) return
-    setWizard(true)
-    if (!checks.token) setStep(1)
-    else if (!checks.copy) setStep(3)
-    else setStep(2)
-    requestAnimationFrame(() => {
-      ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    })
-  }, [openWizard, checks.token, checks.copy])
+    if (!openWizard && !needsKey) return
+    if (openWizard || needsKey) {
+      setWizard(true)
+      setStep(needsKey || !checks.token ? 2 : !checks.copy ? 3 : 2)
+    }
+    if (openWizard) {
+      requestAnimationFrame(() => {
+        ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
+    }
+  }, [openWizard, needsKey, checks.token, checks.copy])
 
   useEffect(() => {
-    if (!checks.token) {
+    if (!checks.token || needsKey) {
       setPlanLabel(null)
       return
     }
@@ -2004,7 +2024,7 @@ function BackupPanel({
     return () => {
       cancelled = true
     }
-  }, [checks.token, settings.lastBackupAt, settings.githubRepoFullName])
+  }, [checks.token, needsKey, settings.lastBackupAt, settings.githubRepoFullName])
 
   async function persistSettings(next: Settings, msg?: string) {
     await saveSettings(next)
@@ -2017,10 +2037,14 @@ function BackupPanel({
     setError(null)
     setStatus(null)
     try {
-      const { login } = await validateGithubToken(token)
+      const { login, repoFullName } = await validateGithubToken(token)
       const next: Settings = {
         ...settings,
         githubToken: token.trim(),
+        githubRepoFullName: repoFullName,
+        githubRepoTokenValidatedAt: Date.now(),
+        backupSetupStep: 'ready',
+        githubGistId: undefined,
         githubAutoBackup: settings.githubAutoBackup ?? true,
       }
       await persistSettings(next, `ключ принят · ${login}`)
@@ -2039,10 +2063,14 @@ function BackupPanel({
     setProgress(null)
     try {
       if (token.trim() && token.trim() !== (settings.githubToken ?? '')) {
-        await validateGithubToken(token)
+        const { repoFullName } = await validateGithubToken(token)
         await saveSettings({
           ...settings,
           githubToken: token.trim(),
+          githubRepoFullName: repoFullName,
+          githubRepoTokenValidatedAt: Date.now(),
+          backupSetupStep: 'ready',
+          githubGistId: undefined,
           githubAutoBackup: true,
         })
       }
@@ -2054,6 +2082,10 @@ function BackupPanel({
         ...refreshed,
         githubAutoBackup: true,
         githubBackupVerifiedAt: Date.now(),
+        githubRepoTokenValidatedAt:
+          refreshed.githubRepoTokenValidatedAt ?? Date.now(),
+        backupSetupStep: 'ready',
+        githubGistId: undefined,
       }
       await persistSettings(next, githubSaveStatusMessage(result))
       setWizard(false)
@@ -2075,14 +2107,16 @@ function BackupPanel({
         onProgress: (p) => setProgress(p.message),
       })
       const refreshed = await getSettings()
-      onSettings({
+      const next: Settings = {
         ...refreshed,
         githubBackupVerifiedAt: Date.now(),
-      })
-      await saveSettings({
-        ...refreshed,
-        githubBackupVerifiedAt: Date.now(),
-      })
+        githubRepoTokenValidatedAt:
+          refreshed.githubRepoTokenValidatedAt ?? Date.now(),
+        backupSetupStep: 'ready',
+        githubGistId: undefined,
+      }
+      onSettings(next)
+      await saveSettings(next)
       setStatus(githubSaveStatusMessage(result))
       setProgress(null)
     } catch (e) {
@@ -2142,21 +2176,25 @@ function BackupPanel({
     )
   }
 
-  const bannerKind = autoError
+  const bannerKind = needsKey
     ? 'warn'
-    : setupDone
-      ? 'ok'
-      : checks.token
-        ? 'progress'
-        : 'idle'
+    : autoError
+      ? 'warn'
+      : setupDone
+        ? 'ok'
+        : checks.token
+          ? 'progress'
+          : 'idle'
 
-  const bannerText = autoError
-    ? `Не удалось автосохранить: ${autoError}`
-    : setupDone
-      ? 'Копии с фото сохраняются сами'
-      : gap
-        ? `Осталось: ${gap}`
-        : 'Копия ещё не настроена'
+  const bannerText = needsKey
+    ? NEED_NEW_KEY_TITLE
+    : autoError
+      ? `Не удалось автосохранить: ${autoError}`
+      : setupDone
+        ? 'Копии с фото сохраняются сами'
+        : gap
+          ? `Осталось: ${gap}`
+          : 'Копия ещё не настроена'
 
   const repoHint =
     settings.githubRepoFullName?.trim() || 'look-weather-data'
@@ -2167,6 +2205,31 @@ function BackupPanel({
 
       <div className="backup-banner" data-kind={bannerKind}>
         <p>{bannerText}</p>
+        {needsKey ? (
+          <>
+            <p className="backup-banner-body">{NEED_NEW_KEY_BODY}</p>
+            <a
+              className="olive-btn backup-cta"
+              href={GITHUB_TOKEN_CREATE_URL}
+              target="_blank"
+              rel="noreferrer"
+            >
+              создать ключ с правом repo
+            </a>
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={() => {
+                setWizard(true)
+                setStep(2)
+                setError(null)
+                setStatus(null)
+              }}
+            >
+              уже есть — вставить сюда
+            </button>
+          </>
+        ) : null}
         {setupDone && settings.lastBackupAt ? (
           <p className="backup-banner-meta">
             последняя копия: {formatBackupWhen(settings.lastBackupAt)}
@@ -2175,7 +2238,7 @@ function BackupPanel({
               : ''}
           </p>
         ) : null}
-        {!setupDone && !wizard ? (
+        {!needsKey && !setupDone && !wizard ? (
           <button
             type="button"
             className="olive-btn"
@@ -2189,7 +2252,7 @@ function BackupPanel({
             настроить
           </button>
         ) : null}
-        {autoError ? (
+        {!needsKey && autoError ? (
           <button
             type="button"
             className="ghost-btn"
@@ -2206,8 +2269,12 @@ function BackupPanel({
       <ul className="backup-checklist" aria-label="статус копии">
         {(
           [
-            ['account', 'аккаунт GitHub', checks.account || wizard],
-            ['token', 'ключ сохранён', checks.token],
+            ['account', 'аккаунт GitHub', checks.account || wizard || needsKey],
+            [
+              'token',
+              needsKey ? 'нужен новый ключ' : 'ключ сохранён',
+              needsKey ? false : checks.token,
+            ],
             ['auto', 'автосохранение', checks.auto],
             ['copy', 'первая копия', checks.copy],
             ['verified', 'проверено', checks.verified],
@@ -2220,7 +2287,7 @@ function BackupPanel({
         ))}
       </ul>
 
-      {checks.token ? (
+      {checks.token && !needsKey ? (
         <>
           <label className="auto-backup-row">
             <input
@@ -2260,18 +2327,18 @@ function BackupPanel({
               </a>
               <p>
                 Потом создай ключ (Classic) для look. На странице обязательно
-                отметь право <code>repo</code> — без него закрытая копия с
-                фото не сохранится. Одной галочки <code>gist</code> мало.
+                поставь галочку <code>repo</code> — доступ к закрытым
+                репозиториям. Без неё фото в закрытой папке не сохранятся.
                 Сгенерируй ключ и сразу скопируй строку — её показывают один
                 раз.
               </p>
               <a
                 className="olive-btn backup-cta"
-                href="https://github.com/settings/tokens/new?scopes=repo&description=look"
+                href={GITHUB_TOKEN_CREATE_URL}
                 target="_blank"
                 rel="noreferrer"
               >
-                создать ключ
+                создать ключ с правом repo
               </a>
               <button
                 type="button"
@@ -2285,11 +2352,11 @@ function BackupPanel({
                   <li>
                     Выбери Generate new token (classic), не fine-grained
                   </li>
-                  <li>Note — любое имя, например look</li>
+                  <li>Note — любое имя, например look-weather</li>
                   <li>Expiration — без срока или длинный</li>
                   <li>
                     Галочка у <code>repo</code> (полный доступ к private
-                    repositories). <code>gist</code> отдельно не нужен
+                    repositories)
                   </li>
                   <li>
                     Репозиторий look-weather-data создаст само приложение —
@@ -2310,7 +2377,11 @@ function BackupPanel({
 
           {step === 2 && (
             <div className="backup-wizard-body">
-              <p>Вставь ключ сюда — сразу проверим, подходит ли он.</p>
+              <p>
+                {needsKey
+                  ? 'Вставь новый ключ с галочкой repo — старый для закрытой папки не подойдёт.'
+                  : 'Вставь ключ сюда — сразу проверим доступ к закрытому репозиторию.'}
+              </p>
               <div className="field">
                 <label htmlFor="gh-token-wiz">ключ</label>
                 <input
@@ -2323,6 +2394,14 @@ function BackupPanel({
                   placeholder="начинается с ghp_…"
                 />
               </div>
+              <a
+                className="olive-btn backup-cta"
+                href={GITHUB_TOKEN_CREATE_URL}
+                target="_blank"
+                rel="noreferrer"
+              >
+                создать ключ с правом repo
+              </a>
               <button
                 type="button"
                 className="olive-btn"
@@ -2369,13 +2448,15 @@ function BackupPanel({
             </div>
           )}
 
-          <button
-            type="button"
-            className="text-btn"
-            onClick={() => setWizard(false)}
-          >
-            закрыть
-          </button>
+          {!needsKey ? (
+            <button
+              type="button"
+              className="text-btn"
+              onClick={() => setWizard(false)}
+            >
+              закрыть
+            </button>
+          ) : null}
         </div>
       )}
 
@@ -2424,10 +2505,10 @@ function BackupPanel({
       {status && <p className="status">{status}</p>}
       {error && <p className="error">{error}</p>}
       <p className="field-hint">
-        Ключ храни только на телефоне. На новом устройстве: вставь тот же ключ →
-        восстановить. Если локальное фото уже есть, оно не затирается. Старую
-        копию без фото (gist) ещё можно открыть один раз; новые сохранения идут
-        в закрытый репозиторий look-weather-data с фото.
+        Ключ храни только на телефоне. На новом устройстве: вставь тот же ключ с
+        правом repo → восстановить. Если локальное фото уже есть, оно не
+        затирается. Новые сохранения идут в закрытый репозиторий
+        look-weather-data с фото.
       </p>
     </div>
   )
@@ -2439,12 +2520,14 @@ function SettingsScreen({
   onSettings,
   focusBackup = false,
   autoError = null,
+  autoAccessDenied = false,
 }: {
   settings: Settings
   looksCount: number
   onSettings: (s: Settings) => void
   focusBackup?: boolean
   autoError?: string | null
+  autoAccessDenied?: boolean
 }) {
   const [place, setPlace] = useState<PlaceState>({
     ...settings,
@@ -2701,6 +2784,7 @@ function SettingsScreen({
           onSettings={onSettings}
           openWizard={focusBackup}
           autoError={autoError}
+          autoAccessDenied={autoAccessDenied}
         />
 
         <h3 className="settings-sub">память</h3>
@@ -2768,7 +2852,9 @@ function SettingsScreen({
 function autoBackupToastText(status: AutoBackupStatus): string | null {
   if (status.kind === 'saving') return 'сохраняю копию…'
   if (status.kind === 'ok') return status.message
-  if (status.kind === 'error') return status.message
+  if (status.kind === 'error') {
+    return status.accessDenied ? NEED_NEW_KEY_TITLE : status.message
+  }
   return null
 }
 
@@ -2780,7 +2866,9 @@ export default function App() {
   const { looks, refresh } = useLooks()
 
   useEffect(() => {
-    void getSettings().then(setSettings)
+    void getSettings()
+      .then((s) => ensureBackupMigration(s))
+      .then(setSettings)
   }, [])
 
   useEffect(() => {
@@ -2788,6 +2876,18 @@ export default function App() {
       setAutoStatus(status)
       if (status.kind === 'ok') {
         void getSettings().then(setSettings)
+      }
+      if (status.kind === 'error' && status.accessDenied) {
+        void getSettings()
+          .then((s) =>
+            ensureBackupMigration({
+              ...s,
+              backupSetupStep: 'need-new-key',
+              githubBackupVerifiedAt: undefined,
+              githubRepoTokenValidatedAt: undefined,
+            }),
+          )
+          .then(setSettings)
       }
     })
   }, [])
@@ -2842,6 +2942,10 @@ export default function App() {
 
   const needsCity = !settings.cityConfirmed
   const backupToast = autoBackupToastText(autoStatus)
+  const autoError =
+    autoStatus.kind === 'error' ? autoStatus.message : null
+  const autoAccessDenied =
+    autoStatus.kind === 'error' && Boolean(autoStatus.accessDenied)
 
   return (
     <div className="app">
@@ -2893,7 +2997,11 @@ export default function App() {
             settings={settings}
             looksCount={looks.length}
             onSettings={setSettings}
-            focusBackup={settingsFocus === 'backup'}
+            focusBackup={
+              settingsFocus === 'backup' || needsNewGithubKey(settings)
+            }
+            autoError={autoError}
+            autoAccessDenied={autoAccessDenied}
           />
         )}
       </div>
