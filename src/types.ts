@@ -43,7 +43,20 @@ export type LookExport = Omit<Look, 'photoBlob'> & {
   photoBase64: string
 }
 
-export type Settings = Place
+export type Settings = Place & {
+  /** User confirmed city on onboarding / settings */
+  cityConfirmed?: boolean
+  /** GitHub PAT — only in IndexedDB, never in public repo or shared backup JSON */
+  githubToken?: string
+  /** Private gist id for cloud backup */
+  githubGistId?: string
+  /** Last successful GitHub / file backup timestamp */
+  lastBackupAt?: number
+  /** Looks count at last backup — for soft «пора бэкапнуть» */
+  looksCountAtBackup?: number
+  /** When user dismissed backup reminder */
+  backupReminderDismissedAt?: number
+}
 
 export type Tab = 'today' | 'add' | 'archive' | 'settings'
 

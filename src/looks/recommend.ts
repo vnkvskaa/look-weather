@@ -16,10 +16,21 @@ export function effectiveWarmth(look: Look): number {
   return look.weather.feelsLike + shift
 }
 
+export function isWet(profile: WeatherProfile): boolean {
+  return profile.precipMm >= 1 || profile.precipProb >= 50
+}
+
+/** Short tip when target weather is wet — for UI banners / reasons. */
+export function rainAdvice(target: WeatherProfile): string | null {
+  if (!isWet(target)) return null
+  if (target.precipMm >= 2 || target.precipProb >= 70) {
+    return 'возьми защиту от дождя'
+  }
+  return 'возможен дождь — лучше взять защиту'
+}
+
 function precipMismatch(target: WeatherProfile, look: WeatherProfile): number {
-  const tWet = target.precipMm >= 1 || target.precipProb >= 50
-  const lWet = look.precipMm >= 1 || look.precipProb >= 50
-  return tWet === lWet ? 0 : 1
+  return isWet(target) === isWet(look) ? 0 : 1
 }
 
 /** Lower distance = better weather match. Not related to date/createdAt. */
@@ -76,10 +87,12 @@ function buildReason(
 
   if (precipMismatch(target, look.weather)) {
     bits.push(
-      target.precipMm >= 1 || target.precipProb >= 50
-        ? 'сейчас сыро — лук был в сухой день'
+      isWet(target)
+        ? 'сейчас сыро — лук был в сухой день · возьми защиту от дождя'
         : 'лук был в дождь — сейчас суше',
     )
+  } else if (isWet(target)) {
+    bits.push(rainAdvice(target) ?? 'возьми защиту от дождя')
   } else if (look.weather.windMs >= 4.5 && target.windMs >= 4.5) {
     bits.push('похожий ветер')
   }
@@ -115,4 +128,22 @@ export function rankLooks(
   })
 
   return ranked.slice(0, limit)
+}
+
+/** Looks from the last `days` calendar days without comfort feedback. */
+export function looksNeedingFeedback(looks: Look[], days = 2): Look[] {
+  const cutoff = new Date()
+  cutoff.setHours(0, 0, 0, 0)
+  cutoff.setDate(cutoff.getDate() - (days - 1))
+  const cutoffIso = localISODate(cutoff)
+
+  return looks
+    .filter((look) => !look.feedback && look.date >= cutoffIso)
+    .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt)
+}
+
+function localISODate(d: Date): string {
+  const off = d.getTimezoneOffset()
+  const local = new Date(d.getTime() - off * 60_000)
+  return local.toISOString().slice(0, 10)
 }

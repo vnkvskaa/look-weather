@@ -8,13 +8,26 @@ import {
   updateLook,
   updateLookFeedback,
 } from './db'
-import { importBackupFile, shareOrDownloadBackup } from './looks/backup'
+import {
+  importBackupFile,
+  shareOrDownloadBackup,
+  shouldRemindBackup,
+  markBackupDone,
+} from './looks/backup'
+import {
+  restoreBackupFromGithub,
+  saveBackupToGithub,
+} from './looks/githubBackup'
 import {
   compressImage,
   blobToObjectUrl,
   extractPhotoMeta,
 } from './looks/media'
-import { rankLooks } from './looks/recommend'
+import {
+  looksNeedingFeedback,
+  rainAdvice,
+  rankLooks,
+} from './looks/recommend'
 import type {
   Feedback,
   LocationSource,
@@ -37,6 +50,25 @@ function todayISO() {
   const off = d.getTimezoneOffset()
   const local = new Date(d.getTime() - off * 60_000)
   return local.toISOString().slice(0, 10)
+}
+
+function tomorrowISO() {
+  const d = new Date()
+  d.setDate(d.getDate() + 1)
+  const off = d.getTimezoneOffset()
+  const local = new Date(d.getTime() - off * 60_000)
+  return local.toISOString().slice(0, 10)
+}
+
+/** Next full hour, or 09:00 if still early. */
+function defaultOutingTime(): string {
+  const now = new Date()
+  const next = new Date(now)
+  next.setMinutes(0, 0, 0)
+  next.setHours(next.getHours() + 1)
+  const h = next.getHours()
+  if (h < 7) return '09:00'
+  return `${String(h).padStart(2, '0')}:00`
 }
 
 function formatDateRu(iso: string, time?: string) {
@@ -208,7 +240,7 @@ function LocationEditor({
     }
   }
 
-  async function useGeo() {
+  async function requestGeo() {
     setError(null)
     if (!navigator.geolocation) {
       setError('Геолокация недоступна')
@@ -268,7 +300,7 @@ function LocationEditor({
             <button
               type="button"
               className="ghost-btn"
-              onClick={() => void useGeo()}
+              onClick={() => void requestGeo()}
               disabled={busy}
             >
               {busy ? '…' : 'гео'}
@@ -341,27 +373,91 @@ function LocationEditor({
   )
 }
 
+function CityOnboarding({
+  settings,
+  onDone,
+}: {
+  settings: Settings
+  onDone: (s: Settings) => void
+}) {
+  const [place, setPlace] = useState<PlaceState>({
+    ...settings,
+    source: 'settings',
+  })
+  const [saving, setSaving] = useState(false)
+
+  async function confirm() {
+    setSaving(true)
+    const next: Settings = {
+      ...settings,
+      placeName: place.placeName,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      cityConfirmed: true,
+    }
+    await saveSettings(next)
+    onDone(next)
+    setSaving(false)
+  }
+
+  return (
+    <div className="onboard-overlay" role="dialog" aria-modal="true">
+      <div className="onboard-sheet corner">
+        <div className="section-kicker">старт</div>
+        <h2 className="block-title">где ты сейчас?</h2>
+        <p className="onboard-copy">
+          Город нужен для погоды «сегодня». Можно взять гео или найти вручную.
+        </p>
+        <LocationEditor place={place} onChange={setPlace} />
+        <button
+          type="button"
+          className="olive-btn"
+          disabled={saving}
+          onClick={() => void confirm()}
+        >
+          {saving ? 'сохраняю…' : 'это мой город'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function TodayScreen({
   looks,
   settings,
   onFeedback,
   onAdd,
+  onOpenSettings,
+  onSettings,
 }: {
   looks: Look[]
   settings: Settings
   onFeedback: (id: string, f: Feedback) => void
   onAdd: () => void
+  onOpenSettings: () => void
+  onSettings: (s: Settings) => void
 }) {
   const [date, setDate] = useState(todayISO)
+  const [outingTime, setOutingTime] = useState(defaultOutingTime)
   const [weather, setWeather] = useState<WeatherProfile | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [showBackupHint, setShowBackupHint] = useState(false)
+
+  useEffect(() => {
+    setShowBackupHint(shouldRemindBackup(settings, looks.length))
+  }, [settings, looks.length])
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError(null)
-    fetchWeatherForDate(settings.latitude, settings.longitude, date)
+    fetchWeatherForDate(
+      settings.latitude,
+      settings.longitude,
+      date,
+      outingTime || undefined,
+    )
       .then((w) => {
         if (!cancelled) setWeather(w)
       })
@@ -374,12 +470,25 @@ function TodayScreen({
     return () => {
       cancelled = true
     }
-  }, [date, settings.latitude, settings.longitude])
+  }, [date, outingTime, settings.latitude, settings.longitude])
 
   const ranked = useMemo(
     () => (weather ? rankLooks(looks, weather) : []),
     [looks, weather],
   )
+
+  const rainTip = weather ? rainAdvice(weather) : null
+  const needFeedback = useMemo(() => looksNeedingFeedback(looks, 2), [looks])
+
+  async function dismissBackupHint() {
+    const next: Settings = {
+      ...settings,
+      backupReminderDismissedAt: Date.now(),
+    }
+    await saveSettings(next)
+    onSettings(next)
+    setShowBackupHint(false)
+  }
 
   return (
     <>
@@ -389,11 +498,70 @@ function TodayScreen({
         <button
           type="button"
           className="ghost-btn"
+          data-active={date === todayISO()}
           onClick={() => setDate(todayISO())}
         >
           сегодня
         </button>
+        <button
+          type="button"
+          className="ghost-btn"
+          data-active={date === tomorrowISO()}
+          onClick={() => setDate(tomorrowISO())}
+        >
+          завтра
+        </button>
       </div>
+
+      <div className="control-row outing-row">
+        <TimePicker
+          value={outingTime}
+          onChange={setOutingTime}
+          hint="сейчас выхожу"
+        />
+      </div>
+
+      {showBackupHint && (
+        <div className="soft-nudge corner">
+          <p>Пора бэкапнуть луки — в приватный Gist на GitHub.</p>
+          <div className="nudge-actions">
+            <button
+              type="button"
+              className="olive-btn"
+              onClick={onOpenSettings}
+            >
+              открыть бэкап
+            </button>
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={() => void dismissBackupHint()}
+            >
+              позже
+            </button>
+          </div>
+        </div>
+      )}
+
+      {needFeedback.length > 0 && (
+        <div className="soft-nudge corner">
+          <p>В этой одежде было? — за последние дни без отметки.</p>
+          {needFeedback.slice(0, 2).map((look) => (
+            <div key={look.id} className="nudge-look">
+              <div className="nudge-look-thumb">
+                <Photo blob={look.photoBlob} alt="" />
+              </div>
+              <div className="nudge-look-body">
+                <p>{formatDateRu(look.date, look.time)}</p>
+                <FeedbackBar
+                  value={look.feedback}
+                  onChange={(f) => onFeedback(look.id, f)}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {loading && (
         <p className="status loading-pulse">собираю профиль погоды…</p>
@@ -410,9 +578,15 @@ function TodayScreen({
               {settings.placeName}
               <br />
               {formatDateRu(date)}
+              {outingTime ? (
+                <>
+                  <br />в {outingTime}
+                </>
+              ) : null}
             </div>
           </div>
           <p className="weather-label">{weatherLabel(weather)}</p>
+          {rainTip && <p className="rain-tip">{rainTip}</p>}
           <div className="stats corner">
             <div className="stat">
               <b>{Math.round(weather.tempMean)}°</b>
@@ -437,7 +611,8 @@ function TodayScreen({
       <h2 className="block-title">что надеть</h2>
       {weather && !loading && looks.length > 0 && (
         <p className="rank-hint">
-          по похожей погоде: ощущается, ветер, влажность, осадки
+          по похожей погоде{outingTime ? ` около ${outingTime}` : ''}:
+          ощущается, ветер, влажность, осадки
         </p>
       )}
       {looks.length === 0 && (
@@ -484,9 +659,11 @@ function TodayScreen({
 function AddLookScreen({
   settings,
   onSaved,
+  onFeedback,
 }: {
   settings: Settings
   onSaved: () => void
+  onFeedback: (id: string, f: Feedback) => Promise<void>
 }) {
   const galleryRef = useRef<HTMLInputElement>(null)
   const [date, setDate] = useState(todayISO)
@@ -506,6 +683,7 @@ function AddLookScreen({
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [pendingFeedback, setPendingFeedback] = useState<Look | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -621,12 +799,49 @@ function AddLookScreen({
       if (preview) URL.revokeObjectURL(preview)
       setPreview(null)
       setStatus(null)
-      onSaved()
+      setPendingFeedback(look)
     } catch {
       setError('Не удалось сохранить')
     } finally {
       setSaving(false)
     }
+  }
+
+  async function finishFeedback(f?: Feedback) {
+    if (pendingFeedback && f) {
+      await onFeedback(pendingFeedback.id, f)
+    }
+    setPendingFeedback(null)
+    onSaved()
+  }
+
+  if (pendingFeedback) {
+    return (
+      <>
+        <div className="section-kicker">сохранено</div>
+        <h2 className="block-title">в этой одежде было?</h2>
+        <div className="form-stack">
+          <div className="photo-drop corner has-photo">
+            <Photo blob={pendingFeedback.photoBlob} alt="Сохранённый лук" />
+          </div>
+          <p className="status">
+            {formatDateRu(pendingFeedback.date, pendingFeedback.time)} ·{' '}
+            {weatherLabel(pendingFeedback.weather)}
+          </p>
+          <FeedbackBar
+            value={pendingFeedback.feedback}
+            onChange={(f) => void finishFeedback(f)}
+          />
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={() => void finishFeedback()}
+          >
+            пропустить
+          </button>
+        </div>
+      </>
+    )
   }
 
   const metaLabel =
@@ -894,28 +1109,35 @@ function ArchiveScreen({
 
 function SettingsScreen({
   settings,
+  looksCount,
   onSettings,
 }: {
   settings: Settings
+  looksCount: number
   onSettings: (s: Settings) => void
 }) {
   const [place, setPlace] = useState<PlaceState>({
     ...settings,
     source: 'settings',
   })
+  const [token, setToken] = useState(settings.githubToken ?? '')
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     setPlace({ ...settings, source: 'settings' })
+    setToken(settings.githubToken ?? '')
   }, [settings])
 
   async function persist(next: PlaceState) {
     setPlace(next)
     const saved: Settings = {
+      ...settings,
       placeName: next.placeName,
       latitude: next.latitude,
       longitude: next.longitude,
+      cityConfirmed: true,
     }
     await saveSettings(saved)
     onSettings(saved)
@@ -923,10 +1145,27 @@ function SettingsScreen({
     setError(null)
   }
 
+  async function saveToken() {
+    const next: Settings = {
+      ...settings,
+      githubToken: token.trim() || undefined,
+    }
+    await saveSettings(next)
+    onSettings(next)
+    setStatus(
+      token.trim()
+        ? 'токен сохранён на этом телефоне'
+        : 'токен удалён с телефона',
+    )
+    setError(null)
+  }
+
   async function exportBackup() {
     setError(null)
     try {
       await shareOrDownloadBackup()
+      const next = await markBackupDone(looksCount)
+      onSettings(next)
       setStatus('бэкап готов — сохрани в Файлы / iCloud')
     } catch {
       setError('Не удалось экспортировать')
@@ -942,6 +1181,45 @@ function SettingsScreen({
       window.location.reload()
     } catch (e) {
       setError((e as Error).message)
+    }
+  }
+
+  async function githubSave() {
+    setBusy(true)
+    setError(null)
+    try {
+      if (token.trim() !== (settings.githubToken ?? '')) {
+        await saveSettings({ ...settings, githubToken: token.trim() })
+      }
+      const result = await saveBackupToGithub()
+      const refreshed = await getSettings()
+      onSettings(refreshed)
+      setStatus(
+        result.recompressed
+          ? `сохранено в GitHub (gist ${result.gistId.slice(0, 8)}…) — фото сжаты сильнее`
+          : `сохранено в GitHub (gist ${result.gistId.slice(0, 8)}…)`,
+      )
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function githubRestore() {
+    setBusy(true)
+    setError(null)
+    try {
+      if (token.trim() !== (settings.githubToken ?? '')) {
+        await saveSettings({ ...settings, githubToken: token.trim() })
+      }
+      const n = await restoreBackupFromGithub()
+      setStatus(`восстановлено луков: ${n}`)
+      window.location.reload()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -962,6 +1240,57 @@ function SettingsScreen({
           сейчас · {settings.placeName} · {settings.latitude.toFixed(2)},{' '}
           {settings.longitude.toFixed(2)}
         </p>
+
+        <h3 className="settings-sub">бэкап в GitHub</h3>
+        <p>
+          Публичный репозиторий — только код. Личные фото — в приватный Gist.
+          Токен остаётся на телефоне, в репозиторий не попадает.
+        </p>
+        <div className="field">
+          <label htmlFor="gh-token">GitHub PAT</label>
+          <input
+            id="gh-token"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="ghp_… или github_pat_…"
+          />
+        </div>
+        <p className="field-hint">
+          Classic: право <code>gist</code>. Fine-grained: доступ к Gists.
+          {settings.githubGistId
+            ? ` Gist: ${settings.githubGistId.slice(0, 10)}…`
+            : ''}
+        </p>
+        <button
+          type="button"
+          className="ghost-btn"
+          onClick={() => void saveToken()}
+        >
+          сохранить токен
+        </button>
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="olive-btn"
+            disabled={busy}
+            onClick={() => void githubSave()}
+          >
+            {busy ? '…' : 'сохранить в GitHub'}
+          </button>
+          <button
+            type="button"
+            className="solid-btn"
+            disabled={busy}
+            onClick={() => void githubRestore()}
+          >
+            восстановить из GitHub
+          </button>
+        </div>
+
+        <h3 className="settings-sub">файлы</h3>
         <button
           type="button"
           className="solid-btn"
@@ -1017,6 +1346,8 @@ export default function App() {
     )
   }
 
+  const needsCity = !settings.cityConfirmed
+
   return (
     <div className="app">
       <div className="dot-grid" aria-hidden />
@@ -1034,11 +1365,14 @@ export default function App() {
             settings={settings}
             onFeedback={onFeedback}
             onAdd={() => setTab('add')}
+            onOpenSettings={() => setTab('settings')}
+            onSettings={setSettings}
           />
         )}
         {tab === 'add' && (
           <AddLookScreen
             settings={settings}
+            onFeedback={onFeedback}
             onSaved={() => {
               void refresh()
               setTab('today')
@@ -1056,7 +1390,11 @@ export default function App() {
           />
         )}
         {tab === 'settings' && (
-          <SettingsScreen settings={settings} onSettings={setSettings} />
+          <SettingsScreen
+            settings={settings}
+            looksCount={looks.length}
+            onSettings={setSettings}
+          />
         )}
       </div>
 
@@ -1079,6 +1417,10 @@ export default function App() {
           </button>
         ))}
       </nav>
+
+      {needsCity && (
+        <CityOnboarding settings={settings} onDone={setSettings} />
+      )}
     </div>
   )
 }

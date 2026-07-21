@@ -5,6 +5,7 @@ const DEFAULT_SETTINGS: Settings = {
   placeName: 'Москва',
   latitude: 55.7558,
   longitude: 37.6173,
+  cityConfirmed: false,
 }
 
 class LookWeatherDB extends Dexie {
@@ -24,8 +25,16 @@ export const db = new LookWeatherDB()
 
 export async function getSettings(): Promise<Settings> {
   const row = await db.meta.get('settings')
-  if (row?.value) return row.value as Settings
-  return DEFAULT_SETTINGS
+  if (row?.value) {
+    const saved = row.value as Settings
+    // Existing installs already chose a city — skip onboarding.
+    return {
+      ...DEFAULT_SETTINGS,
+      ...saved,
+      cityConfirmed: saved.cityConfirmed ?? true,
+    }
+  }
+  return { ...DEFAULT_SETTINGS }
 }
 
 export async function saveSettings(settings: Settings): Promise<void> {

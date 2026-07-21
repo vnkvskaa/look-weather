@@ -1,6 +1,6 @@
 import { listLooks, replaceAllLooks, getSettings, saveSettings } from '../db'
 import type { Look, LookExport, Settings } from '../types'
-import { base64ToBlob, blobToBase64 } from './media'
+import { base64ToBlob, blobToBase64, compressImage } from './media'
 
 export type BackupPayload = {
   version: 1
@@ -9,11 +9,43 @@ export type BackupPayload = {
   looks: LookExport[]
 }
 
-export async function buildBackup(): Promise<BackupPayload> {
+/** Settings fields safe to put in a shareable / gist JSON (no PAT). */
+export function settingsForBackup(settings: Settings): Settings {
+  return {
+    placeName: settings.placeName,
+    latitude: settings.latitude,
+    longitude: settings.longitude,
+    cityConfirmed: settings.cityConfirmed,
+    githubGistId: settings.githubGistId,
+    lastBackupAt: settings.lastBackupAt,
+    looksCountAtBackup: settings.looksCountAtBackup,
+    backupReminderDismissedAt: settings.backupReminderDismissedAt,
+  }
+}
+
+export type BackupBuildOptions = {
+  /** Re-encode photos smaller for gist size limits */
+  recompress?: { maxSide: number; quality: number }
+}
+
+export async function buildBackup(
+  options: BackupBuildOptions = {},
+): Promise<BackupPayload> {
   const [looks, settings] = await Promise.all([listLooks(), getSettings()])
   const exported: LookExport[] = []
   for (const look of looks) {
-    const { photoBlob, ...rest } = look
+    let photoBlob = look.photoBlob
+    if (options.recompress) {
+      const file = new File([photoBlob], 'look.jpg', {
+        type: photoBlob.type || 'image/jpeg',
+      })
+      photoBlob = await compressImage(
+        file,
+        options.recompress.maxSide,
+        options.recompress.quality,
+      )
+    }
+    const { photoBlob: _blob, ...rest } = look
     exported.push({
       ...rest,
       photoBase64: await blobToBase64(photoBlob),
@@ -22,7 +54,7 @@ export async function buildBackup(): Promise<BackupPayload> {
   return {
     version: 1,
     exportedAt: new Date().toISOString(),
-    settings,
+    settings: settingsForBackup(settings),
     looks: exported,
   }
 }
@@ -51,9 +83,9 @@ export async function shareOrDownloadBackup(): Promise<void> {
   URL.revokeObjectURL(url)
 }
 
-export async function importBackupFile(file: File): Promise<number> {
-  const text = await file.text()
-  const data = JSON.parse(text) as BackupPayload
+export async function importBackupPayload(
+  data: BackupPayload,
+): Promise<number> {
   if (data.version !== 1 || !Array.isArray(data.looks)) {
     throw new Error('Неверный формат бэкапа')
   }
@@ -66,7 +98,54 @@ export async function importBackupFile(file: File): Promise<number> {
     }
   })
 
+  const current = await getSettings()
   await replaceAllLooks(looks)
-  if (data.settings) await saveSettings(data.settings)
+  if (data.settings) {
+    await saveSettings({
+      ...settingsForBackup(data.settings),
+      // Keep local PAT — never overwrite from backup JSON
+      githubToken: current.githubToken,
+      githubGistId:
+        data.settings.githubGistId || current.githubGistId,
+    })
+  }
   return looks.length
+}
+
+export async function importBackupFile(file: File): Promise<number> {
+  const text = await file.text()
+  const data = JSON.parse(text) as BackupPayload
+  return importBackupPayload(data)
+}
+
+/** Soft reminder: every N new looks or weekly, unless recently dismissed. */
+export function shouldRemindBackup(
+  settings: Settings,
+  looksCount: number,
+): boolean {
+  if (looksCount === 0) return false
+  const now = Date.now()
+  const dismissed = settings.backupReminderDismissedAt ?? 0
+  if (now - dismissed < 3 * 24 * 60 * 60 * 1000) return false
+
+  const atBackup = settings.looksCountAtBackup ?? 0
+  if (looksCount - atBackup >= 3) return true
+
+  const last = settings.lastBackupAt ?? 0
+  if (last === 0 && looksCount >= 3) return true
+  if (last > 0 && now - last >= 7 * 24 * 60 * 60 * 1000) return true
+
+  return false
+}
+
+export async function markBackupDone(looksCount: number): Promise<Settings> {
+  const settings = await getSettings()
+  const next: Settings = {
+    ...settings,
+    lastBackupAt: Date.now(),
+    looksCountAtBackup: looksCount,
+    backupReminderDismissedAt: undefined,
+  }
+  await saveSettings(next)
+  return next
 }

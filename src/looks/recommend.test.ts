@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { effectiveWarmth, matchPercent, rankLooks } from './recommend'
+import {
+  effectiveWarmth,
+  looksNeedingFeedback,
+  matchPercent,
+  rainAdvice,
+  rankLooks,
+} from './recommend'
 import type { Look, WeatherProfile } from '../types'
 
 function weather(partial: Partial<WeatherProfile>): WeatherProfile {
@@ -167,5 +173,55 @@ describe('rankLooks', () => {
 
   it('matchPercent is higher for closer weather', () => {
     expect(matchPercent(0.5)).toBeGreaterThan(matchPercent(12))
+  })
+
+  it('adds rain tip when target is wet', () => {
+    const target = weather({
+      date: '2026-07-21',
+      feelsLike: 12,
+      precipMm: 3,
+      precipProb: 80,
+    })
+    const dry = look({
+      id: 'dry',
+      date: '2026-06-01',
+      weather: weather({
+        date: '2026-06-01',
+        feelsLike: 12,
+        precipMm: 0,
+        precipProb: 5,
+      }),
+    })
+    const ranked = rankLooks([dry], target, 1)
+    expect(rainAdvice(target)).toMatch(/защит/)
+    expect(ranked[0].reason).toMatch(/защит/)
+  })
+
+  it('looksNeedingFeedback returns recent looks without feedback', () => {
+    const today = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const iso = (d: Date) =>
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    const recent = look({
+      id: 'recent',
+      date: iso(today),
+      weather: weather({ date: iso(today), feelsLike: 10 }),
+    })
+    const withFb = look({
+      id: 'fb',
+      date: iso(today),
+      weather: weather({ date: iso(today), feelsLike: 10 }),
+      feedback: 'ok',
+    })
+    const old = new Date(today)
+    old.setDate(old.getDate() - 10)
+    const stale = look({
+      id: 'stale',
+      date: iso(old),
+      weather: weather({ date: iso(old), feelsLike: 10 }),
+    })
+    expect(looksNeedingFeedback([recent, withFb, stale], 2).map((l) => l.id)).toEqual([
+      'recent',
+    ])
   })
 })
