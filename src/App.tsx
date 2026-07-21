@@ -512,18 +512,15 @@ function DayPhotoStrip({
           e.stopPropagation()
           setLightboxId(active.id)
         }}
-        aria-label="открыть фото крупнее"
+        aria-label="открыть фото"
       >
-        <Photo lookId={active.id} alt={alt} variant="full" />
+        <Photo lookId={active.id} alt={alt} variant="thumb" />
         {badge ? <span className="match-badge">{badge}</span> : null}
         {favorite ? (
           <span className="favorite-mark" aria-hidden>
             ★
           </span>
         ) : null}
-        <span className="look-thumb-hint" aria-hidden>
-          нажми · крупнее
-        </span>
       </button>
       {multi ? (
         <div className="day-thumbs" role="tablist" aria-label="фото за день">
@@ -569,6 +566,7 @@ function DayLookCard({
   onFavorite,
   actions,
   style,
+  density = 'compact',
 }: {
   group: DayGroup
   badge?: string
@@ -578,6 +576,8 @@ function DayLookCard({
   onFavorite?: (id: string, favorite: boolean) => void
   actions?: (active: Look) => ReactNode
   style?: CSSProperties
+  /** compact — list row; featured — slightly larger for «лучше всего» */
+  density?: 'compact' | 'featured'
 }) {
   const [activeId, setActiveId] = useState(group.primary.id)
 
@@ -591,7 +591,10 @@ function DayLookCard({
   const multi = group.looks.length > 1
 
   return (
-    <article className="look-card day-card" style={style}>
+    <article
+      className={`look-card day-card look-card-${density}`}
+      style={style}
+    >
       <DayPhotoStrip
         looks={group.looks}
         activeId={active.id}
@@ -1204,6 +1207,7 @@ function TodayScreen({
           <div className="look-grid advice-primary">
             <DayLookCard
               group={primary}
+              density="featured"
               badge={matchDeltaLabel(
                 primary.effectiveWarmth,
                 weather.feelsLike,

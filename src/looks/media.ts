@@ -18,8 +18,8 @@ export type PhotoMeta = PhotoTakenAt & {
 
 /** Main photo on device — sharp enough to judge fabric and fit. */
 export const PHOTO_MAIN = { maxSide: 1920, quality: 0.9 } as const
-/** List / archive strip thumbs (small UI only). */
-export const PHOTO_THUMB = { maxSide: 520, quality: 0.8 } as const
+/** List / archive strip thumbs — sharp on retina at ~112–148px CSS. */
+export const PHOTO_THUMB = { maxSide: 640, quality: 0.85 } as const
 /** Optional tiny cloud preview — not used for on-device viewing. */
 export const PHOTO_CLOUD_THUMB = { maxSide: 220, quality: 0.55 } as const
 /** Soft cap per look thumb before base64 (~80–100KB binary). */
