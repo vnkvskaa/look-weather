@@ -207,6 +207,66 @@ export function rankDayGroups(
   return ranked.slice(0, limit)
 }
 
+/** Distinct candidate days (excluding the target calendar day). */
+export function countDistinctCandidateDays(
+  looks: Look[],
+  targetDate: string,
+): number {
+  const days = new Set<string>()
+  for (const look of looks) {
+    if (look.date !== targetDate) days.add(look.date)
+  }
+  return days.size
+}
+
+const THIN_ARCHIVE_MIN_DAYS = 3
+/** Below this match % the top hit is only a rough nearest neighbor. */
+const WEAK_MATCH_PERCENT = 55
+const WEAK_MATCH_SCORE = 14
+
+/**
+ * Thin archive or weak top match → don’t imply confident advice.
+ * Message for UI: «мало похожих дней — это ближайшее, не точный совет»
+ */
+export function isThinAdvice(
+  looks: Look[],
+  targetDate: string,
+  top?: Pick<RankedDayGroup, 'matchPercent' | 'score'> | null,
+): boolean {
+  if (countDistinctCandidateDays(looks, targetDate) < THIN_ARCHIVE_MIN_DAYS) {
+    return true
+  }
+  if (!top) return false
+  return top.matchPercent < WEAK_MATCH_PERCENT || top.score > WEAK_MATCH_SCORE
+}
+
+export const THIN_ADVICE_COPY =
+  'мало похожих дней — это ближайшее, не точный совет'
+
+/** One primary card + the rest for «ещё похожие». */
+export function splitPrimaryAdvice(ranked: RankedDayGroup[]): {
+  primary: RankedDayGroup | null
+  rest: RankedDayGroup[]
+} {
+  if (ranked.length === 0) return { primary: null, rest: [] }
+  return { primary: ranked[0], rest: ranked.slice(1) }
+}
+
+/**
+ * Soft badge instead of loud match %: feels / «ближе к +X°».
+ * `matchPercent` stays available for subtle copy if needed.
+ */
+export function matchDeltaLabel(
+  effectiveWarmth: number,
+  targetFeels: number,
+): string {
+  const rounded = Math.round(effectiveWarmth)
+  const delta = Math.round(effectiveWarmth - targetFeels)
+  const sign = rounded > 0 ? '+' : ''
+  if (Math.abs(delta) <= 1) return `${sign}${rounded}°`
+  return `ближе к ${sign}${rounded}°`
+}
+
 /** Looks from the last `days` calendar days without comfort feedback. */
 export function looksNeedingFeedback(looks: Look[], days = 2): Look[] {
   const cutoff = new Date()

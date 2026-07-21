@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   effectiveWarmth,
+  isThinAdvice,
   looksNeedingFeedback,
+  matchDeltaLabel,
   matchPercent,
   rainAdvice,
   rankDayGroups,
   rankLooks,
+  splitPrimaryAdvice,
   weatherTips,
   windAdvice,
 } from './recommend'
@@ -331,6 +334,96 @@ describe('rankDayGroups', () => {
     expect(ranked.map((g) => g.date)).toEqual(['2026-06-01', '2026-05-01'])
     expect(ranked[0].looks).toHaveLength(2)
     expect(ranked[0].best.look.id).toBe('a1')
+  })
+
+  it('splitPrimaryAdvice puts best day first', () => {
+    const target = weather({ date: '2026-07-21', feelsLike: 10 })
+    const close = look({
+      id: 'close',
+      date: '2026-06-01',
+      weather: weather({ date: '2026-06-01', feelsLike: 10 }),
+    })
+    const far = look({
+      id: 'far',
+      date: '2026-05-01',
+      weather: weather({ date: '2026-05-01', feelsLike: 28 }),
+    })
+    const mid = look({
+      id: 'mid',
+      date: '2026-04-01',
+      weather: weather({ date: '2026-04-01', feelsLike: 16 }),
+    })
+    const ranked = rankDayGroups([far, mid, close], target, 5)
+    const { primary, rest } = splitPrimaryAdvice(ranked)
+    expect(primary?.date).toBe('2026-06-01')
+    expect(rest.map((g) => g.date)).toEqual(['2026-04-01', '2026-05-01'])
+  })
+})
+
+describe('thin advice messaging', () => {
+  it('flags archive with fewer than 3 distinct days', () => {
+    const a = look({
+      id: 'a',
+      date: '2026-06-01',
+      weather: weather({ date: '2026-06-01', feelsLike: 12 }),
+    })
+    const b = look({
+      id: 'b',
+      date: '2026-05-01',
+      weather: weather({ date: '2026-05-01', feelsLike: 12 }),
+    })
+    expect(isThinAdvice([a, b], '2026-07-21')).toBe(true)
+  })
+
+  it('ok when enough days and strong top match', () => {
+    const looks = [1, 2, 3].map((n) =>
+      look({
+        id: `d${n}`,
+        date: `2026-0${n}-01`,
+        weather: weather({ date: `2026-0${n}-01`, feelsLike: 12 }),
+      }),
+    )
+    const ranked = rankDayGroups(
+      looks,
+      weather({ date: '2026-07-21', feelsLike: 12 }),
+      5,
+    )
+    expect(isThinAdvice(looks, '2026-07-21', ranked[0])).toBe(false)
+  })
+
+  it('flags weak top match even with enough days', () => {
+    const looks = [1, 2, 3].map((n) =>
+      look({
+        id: `hot${n}`,
+        date: `2026-0${n}-15`,
+        weather: weather({
+          date: `2026-0${n}-15`,
+          feelsLike: 30,
+          windMs: 2,
+          humidity: 50,
+          cloudCover: 40,
+        }),
+      }),
+    )
+    const ranked = rankDayGroups(
+      looks,
+      weather({
+        date: '2026-07-21',
+        feelsLike: 0,
+        windMs: 2,
+        humidity: 50,
+        cloudCover: 40,
+      }),
+      5,
+    )
+    expect(ranked[0].matchPercent).toBeLessThan(55)
+    expect(isThinAdvice(looks, '2026-07-21', ranked[0])).toBe(true)
+  })
+
+  it('matchDeltaLabel softens loud percent', () => {
+    expect(matchDeltaLabel(12, 12)).toBe('+12°')
+    expect(matchDeltaLabel(14.2, 10)).toBe('ближе к +14°')
+    expect(matchDeltaLabel(-3, 0)).toBe('ближе к -3°')
   })
 })
 

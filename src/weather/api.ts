@@ -185,14 +185,20 @@ export async function reverseGeocode(
   }
 }
 
+/** Local calendar YYYY-MM-DD — not UTC (toISOString shifts the day near midnight). */
+function localISODate(d: Date): string {
+  const off = d.getTimezoneOffset()
+  const local = new Date(d.getTime() - off * 60_000)
+  return local.toISOString().slice(0, 10)
+}
+
 export async function fetchWeatherForDate(
   latitude: number,
   longitude: number,
   date: string,
   time?: string,
 ): Promise<WeatherProfile> {
-  const today = new Date()
-  const todayStr = today.toISOString().slice(0, 10)
+  const todayStr = localISODate(new Date())
   const target = new Date(date + 'T12:00:00')
   const diffDays = Math.floor(
     (target.getTime() - new Date(todayStr + 'T12:00:00').getTime()) /

@@ -44,6 +44,7 @@ import {
   pruneLookObjectUrls,
   revokeLookObjectUrl,
 } from './looks/media'
+import { importLooksBatch } from './looks/importLook'
 import {
   formatMonthChip,
   formatMonthHeader,
@@ -52,8 +53,12 @@ import {
   listMonthsFromLooks,
 } from './looks/dayGroups'
 import {
+  isThinAdvice,
   looksNeedingFeedback,
+  matchDeltaLabel,
   rankDayGroups,
+  splitPrimaryAdvice,
+  THIN_ADVICE_COPY,
   weatherTips,
 } from './looks/recommend'
 import type {
@@ -733,6 +738,7 @@ function TodayScreen({
   onAdd,
   onOpenSettings,
   onSettings,
+  onRefresh,
 }: {
   looks: Look[]
   settings: Settings
@@ -742,6 +748,7 @@ function TodayScreen({
   onAdd: () => void
   onOpenSettings: (focus?: 'backup') => void
   onSettings: (s: Settings) => void
+  onRefresh: () => Promise<void>
 }) {
   const [date, setDate] = useState(todayISO)
   const [outingTime, setOutingTime] = useState(defaultOutingTime)
@@ -750,6 +757,13 @@ function TodayScreen({
   const [loading, setLoading] = useState(true)
   const [showBackupHint, setShowBackupHint] = useState(false)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
+  const [showSimilar, setShowSimilar] = useState(false)
+  const [batchProgress, setBatchProgress] = useState<{
+    done: number
+    total: number
+  } | null>(null)
+  const [batchError, setBatchError] = useState<string | null>(null)
+  const batchGalleryRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     setShowBackupHint(shouldRemindBackup(settings, looks.length))
@@ -792,6 +806,19 @@ function TodayScreen({
     [pool, weather, outingTime],
   )
 
+  const { primary, rest } = useMemo(
+    () => splitPrimaryAdvice(ranked),
+    [ranked],
+  )
+
+  const thinAdvice = useMemo(
+    () =>
+      weather
+        ? isThinAdvice(pool, weather.date, primary)
+        : false,
+    [pool, weather, primary],
+  )
+
   const tips = weather ? weatherTips(weather) : []
   const needFeedback = useMemo(() => looksNeedingFeedback(looks, 2), [looks])
   const looksForDate = useMemo(
@@ -825,10 +852,37 @@ function TodayScreen({
     onSettings(next)
   }
 
+  async function onBatchFiles(fileList: FileList | null) {
+    const files = fileList ? Array.from(fileList) : []
+    if (files.length === 0) return
+    setBatchError(null)
+    setBatchProgress({ done: 0, total: files.length })
+    try {
+      const { saved, failed } = await importLooksBatch(
+        files,
+        settings,
+        (done, total) => setBatchProgress({ done, total }),
+      )
+      if (saved > 0) {
+        scheduleAutoBackup('look')
+        await onRefresh()
+      }
+      if (failed > 0 && saved === 0) {
+        setBatchError('Не удалось загрузить фото')
+      } else if (failed > 0) {
+        setBatchError(`загружено ${saved}, пропущено ${failed}`)
+      }
+    } catch {
+      setBatchError('Не удалось загрузить фото')
+    } finally {
+      setBatchProgress(null)
+      if (batchGalleryRef.current) batchGalleryRef.current.value = ''
+    }
+  }
+
   return (
     <>
       <div className="section-kicker">погода</div>
-      <PwaInstallHint />
       <div className="control-row">
         <DatePicker value={date} onChange={setDate} />
         <button
@@ -875,28 +929,6 @@ function TodayScreen({
         </div>
       )}
 
-      {showBackupHint && (
-        <div className="soft-nudge corner">
-          <p>Стоит сохранить копию луков — на случай смены телефона.</p>
-          <div className="nudge-actions">
-            <button
-              type="button"
-              className="olive-btn"
-              onClick={() => onOpenSettings('backup')}
-            >
-              настроить
-            </button>
-            <button
-              type="button"
-              className="ghost-btn"
-              onClick={() => void dismissBackupHint()}
-            >
-              позже
-            </button>
-          </div>
-        </div>
-      )}
-
       {looksForDate.length > 0 && (
         <div className="soft-nudge corner recorded-nudge">
           <p>
@@ -910,26 +942,6 @@ function TodayScreen({
           <button type="button" className="ghost-btn" onClick={onAdd}>
             ещё фото
           </button>
-        </div>
-      )}
-
-      {needFeedback.length > 0 && (
-        <div className="soft-nudge corner">
-          <p>Как было в этой одежде?</p>
-          {needFeedback.slice(0, 2).map((look) => (
-            <div key={look.id} className="nudge-look">
-              <div className="nudge-look-thumb">
-                <Photo lookId={look.id} blob={look.photoBlob} alt="" />
-              </div>
-              <div className="nudge-look-body">
-                <p>{formatDateRu(look.date, look.time)}</p>
-                <FeedbackBar
-                  value={look.feedback}
-                  onChange={(f) => onFeedback(look.id, f)}
-                />
-              </div>
-            </div>
-          ))}
         </div>
       )}
 
@@ -1009,6 +1021,23 @@ function TodayScreen({
           <button type="button" className="olive-btn" onClick={onAdd}>
             добавить лук
           </button>
+          <label className="file-btn batch-gallery-btn">
+            загрузить несколько фото из галереи
+            <input
+              ref={batchGalleryRef}
+              type="file"
+              accept="image/*"
+              multiple
+              disabled={Boolean(batchProgress)}
+              onChange={(e) => void onBatchFiles(e.target.files)}
+            />
+          </label>
+          {batchProgress && (
+            <p className="status loading-pulse">
+              {batchProgress.done} из {batchProgress.total}…
+            </p>
+          )}
+          {batchError && <p className="error">{batchError}</p>}
           <button
             type="button"
             className="ghost-btn"
@@ -1025,19 +1054,106 @@ function TodayScreen({
             : 'Нужны луки за другие дни — добавь ещё образы.'}
         </p>
       )}
-      <div className="look-grid">
-        {ranked.map((group, i) => (
-          <DayLookCard
-            key={group.date}
-            group={group}
-            badge={`${group.matchPercent}%`}
-            reason={group.reason}
-            onFeedback={onFeedback}
-            onFeedbackNote={onFeedbackNote}
-            onFavorite={onFavorite}
-            style={{ animationDelay: `${i * 50}ms` }}
-          />
-        ))}
+      {weather && !loading && primary && (
+        <div className="advice-block">
+          {thinAdvice ? (
+            <p className="thin-advice">{THIN_ADVICE_COPY}</p>
+          ) : (
+            <p className="advice-kicker">лучше всего</p>
+          )}
+          <div className="look-grid advice-primary">
+            <DayLookCard
+              group={primary}
+              badge={matchDeltaLabel(
+                primary.effectiveWarmth,
+                weather.feelsLike,
+              )}
+              reason={primary.reason}
+              onFeedback={onFeedback}
+              onFeedbackNote={onFeedbackNote}
+              onFavorite={onFavorite}
+            />
+          </div>
+          {rest.length > 0 && (
+            <div className="advice-similar">
+              <button
+                type="button"
+                className="text-btn advice-similar-toggle"
+                aria-expanded={showSimilar}
+                onClick={() => setShowSimilar((v) => !v)}
+              >
+                {showSimilar
+                  ? 'скрыть похожие'
+                  : `ещё похожие · ${rest.length}`}
+              </button>
+              {showSimilar ? (
+                <div className="look-grid advice-rest">
+                  {rest.map((group, i) => (
+                    <DayLookCard
+                      key={group.date}
+                      group={group}
+                      badge={matchDeltaLabel(
+                        group.effectiveWarmth,
+                        weather.feelsLike,
+                      )}
+                      reason={group.reason}
+                      onFeedback={onFeedback}
+                      onFeedbackNote={onFeedbackNote}
+                      onFavorite={onFavorite}
+                      style={{ animationDelay: `${i * 50}ms` }}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      )}
+
+      {needFeedback.length > 0 && (
+        <div className="soft-nudge corner below-advice">
+          <p>Как было в этой одежде?</p>
+          {needFeedback.slice(0, 2).map((look) => (
+            <div key={look.id} className="nudge-look">
+              <div className="nudge-look-thumb">
+                <Photo lookId={look.id} blob={look.photoBlob} alt="" />
+              </div>
+              <div className="nudge-look-body">
+                <p>{formatDateRu(look.date, look.time)}</p>
+                <FeedbackBar
+                  value={look.feedback}
+                  onChange={(f) => onFeedback(look.id, f)}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showBackupHint && (
+        <div className="soft-nudge corner below-advice">
+          <p>Стоит сохранить копию луков — на случай смены телефона.</p>
+          <div className="nudge-actions">
+            <button
+              type="button"
+              className="olive-btn"
+              onClick={() => onOpenSettings('backup')}
+            >
+              настроить
+            </button>
+            <button
+              type="button"
+              className="ghost-btn"
+              onClick={() => void dismissBackupHint()}
+            >
+              позже
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="below-advice">
+        <PwaInstallHint />
       </div>
     </>
   )
@@ -1070,6 +1186,10 @@ function AddLookScreen({
   const [saving, setSaving] = useState(false)
   const [pendingFeedback, setPendingFeedback] = useState<Look | null>(null)
   const [pendingNote, setPendingNote] = useState('')
+  const [batchProgress, setBatchProgress] = useState<{
+    done: number
+    total: number
+  } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -1140,16 +1260,50 @@ function AddLookScreen({
       if (preview) URL.revokeObjectURL(preview)
       setBlob(compressed)
       setPreview(URL.createObjectURL(compressed))
+      const city = formatPlaceShort(settings.placeName)
       setStatus(
         meta.source === 'exif'
           ? `снято ${formatDateRu(meta.date, meta.time)}`
           : meta.source === 'file'
             ? `дата файла ${formatDateRu(meta.date, meta.time)}`
-            : null,
+            : meta.gps
+              ? `сейчас · место с фото`
+              : `сейчас · город из настроек · ${city}`,
       )
     } catch {
       setError('Не удалось обработать фото')
       setStatus(null)
+    }
+  }
+
+  async function onGalleryFiles(fileList: FileList | null) {
+    const files = fileList ? Array.from(fileList) : []
+    if (files.length === 0) return
+    if (files.length === 1) {
+      await onFile(files[0])
+      return
+    }
+    setError(null)
+    setBatchProgress({ done: 0, total: files.length })
+    try {
+      const { saved, failed } = await importLooksBatch(
+        files,
+        settings,
+        (done, total) => setBatchProgress({ done, total }),
+      )
+      if (saved > 0) scheduleAutoBackup('look')
+      if (saved > 0) {
+        onSaved()
+        return
+      }
+      setError(
+        failed > 0 ? 'Не удалось загрузить фото' : 'Не удалось сохранить',
+      )
+    } catch {
+      setError('Не удалось загрузить фото')
+    } finally {
+      setBatchProgress(null)
+      if (galleryRef.current) galleryRef.current.value = ''
     }
   }
 
@@ -1226,6 +1380,7 @@ function AddLookScreen({
             {formatDateRu(pendingFeedback.date, pendingFeedback.time)} ·{' '}
             {weatherLabel(pendingFeedback.weather)}
           </p>
+          <p className="feedback-nudge-copy">без оценки совет будет хуже</p>
           <FeedbackBar
             value={pendingFeedback.feedback}
             note={pendingNote}
@@ -1235,7 +1390,7 @@ function AddLookScreen({
           />
           <button
             type="button"
-            className="ghost-btn"
+            className="text-btn skip-feedback"
             onClick={() => void finishFeedback()}
           >
             пропустить
@@ -1245,12 +1400,26 @@ function AddLookScreen({
     )
   }
 
+  if (batchProgress) {
+    return (
+      <>
+        <div className="section-kicker">новый</div>
+        <h2 className="block-title">загружаю фото</h2>
+        <p className="status loading-pulse">
+          {batchProgress.done} из {batchProgress.total}…
+        </p>
+      </>
+    )
+  }
+
   const metaLabel =
     metaSource === 'exif'
       ? 'из фото'
       : metaSource === 'file'
         ? 'из файла'
-        : null
+        : metaSource === 'now'
+          ? 'сейчас'
+          : null
 
   return (
     <>
@@ -1284,10 +1453,12 @@ function AddLookScreen({
               ref={galleryRef}
               type="file"
               accept="image/*"
-              onChange={(e) => void onFile(e.target.files?.[0])}
+              multiple
+              onChange={(e) => void onGalleryFiles(e.target.files)}
             />
           </label>
         </div>
+        <p className="field-hint">можно выбрать несколько фото из галереи</p>
         <div className="field-row">
           <div className="field">
             <label>
@@ -2399,6 +2570,7 @@ export default function App() {
             onAdd={() => setTab('add')}
             onOpenSettings={openSettings}
             onSettings={setSettings}
+            onRefresh={refresh}
           />
         )}
         {tab === 'add' && (
