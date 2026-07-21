@@ -33,6 +33,8 @@ import {
 import {
   restoreBackupFromGithub,
   saveBackupToGithub,
+  validateGithubToken,
+  verifyGithubBackup,
 } from './looks/githubBackup'
 import {
   compressImage,
@@ -41,7 +43,6 @@ import {
 } from './looks/media'
 import {
   groupLooksByDate,
-  placeSummary,
 } from './looks/dayGroups'
 import {
   looksNeedingFeedback,
@@ -59,10 +60,11 @@ import type {
   Tab,
   WeatherProfile,
 } from './types'
-import { ITEM_TAGS } from './types'
+import { FEEDBACK_STEPS, ITEM_TAGS } from './types'
 import {
   fetchWeatherForDate,
   formatFeels,
+  formatPlaceShort,
   reverseGeocode,
   searchPlaces,
   weatherLabel,
@@ -136,7 +138,16 @@ function useLooks() {
   return { looks, refresh }
 }
 
-function Photo({ blob, alt }: { blob: Blob; alt: string }) {
+function Photo({
+  blob,
+  alt,
+  imgKey,
+}: {
+  blob: Blob
+  alt: string
+  /** Force remount when switching looks so the img always tracks the blob. */
+  imgKey?: string
+}) {
   const [url, setUrl] = useState<string | null>(null)
   useEffect(() => {
     const u = blobToObjectUrl(blob)
@@ -144,7 +155,7 @@ function Photo({ blob, alt }: { blob: Blob; alt: string }) {
     return () => URL.revokeObjectURL(u)
   }, [blob])
   if (!url) return null
-  return <img src={url} alt={alt} />
+  return <img key={imgKey ?? url} src={url} alt={alt} />
 }
 
 function DatePicker({
@@ -208,25 +219,44 @@ function FeedbackBar({
   onNoteChange?: (note: string) => void
   showNote?: boolean
 }) {
-  const items: Array<{ id: Feedback; label: string }> = [
-    { id: 'too_cold', label: 'холодно' },
-    { id: 'ok', label: 'норм' },
-    { id: 'too_hot', label: 'жарко' },
-  ]
+  const index = value
+    ? FEEDBACK_STEPS.findIndex((s) => s.id === value)
+    : -1
+
   return (
     <div className="feedback-block">
-      <p className="feedback-caption">в этой одежде было</p>
-      <div className="feedback-row">
-        {items.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            data-active={value === item.id}
-            onClick={() => onChange(item.id)}
-          >
-            {item.label}
-          </button>
-        ))}
+      <p className="feedback-caption">в этой одежде</p>
+      <div
+        className="feedback-scale"
+        role="radiogroup"
+        aria-label="Ощущение в этой одежде"
+      >
+        <div className="feedback-track" aria-hidden>
+          <span
+            className="feedback-track-fill"
+            style={{
+              width:
+                index >= 0
+                  ? `${(index / (FEEDBACK_STEPS.length - 1)) * 100}%`
+                  : '0%',
+            }}
+          />
+        </div>
+        <div className="feedback-steps">
+          {FEEDBACK_STEPS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="radio"
+              aria-checked={value === item.id}
+              data-active={value === item.id}
+              onClick={() => onChange(item.id)}
+            >
+              <span className="feedback-dot" aria-hidden />
+              <span className="feedback-step-label">{item.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
       {showNote && onNoteChange && (
         <input
@@ -246,6 +276,27 @@ function FeedbackBar({
   )
 }
 
+function FavoriteButton({
+  active,
+  onToggle,
+}: {
+  active?: boolean
+  onToggle: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className="favorite-btn"
+      data-active={active === true}
+      aria-pressed={active === true}
+      aria-label={active ? 'убрать из избранного' : 'в избранное'}
+      onClick={onToggle}
+    >
+      <span aria-hidden>{active ? '★' : '☆'}</span>
+    </button>
+  )
+}
+
 function ItemTagsPicker({
   value,
   onChange,
@@ -262,7 +313,11 @@ function ItemTagsPicker({
   }
   return (
     <div className="item-tags">
-      <p className="item-tags-label">что на тебе</p>
+      <p className="item-tags-label">слои</p>
+      <p className="item-tags-hint">
+        Отметь «слой», если была куртка или дождевик — в дождь такие образы
+        выше.
+      </p>
       <div className="item-tags-row">
         {ITEM_TAGS.map((tag) => (
           <button
@@ -328,7 +383,7 @@ function PwaInstallHint() {
   return (
     <div className="pwa-hint corner">
       <p>
-        Добавить на экран «Домой»: Поделиться → На экран «Домой».
+        На экран «Домой»: Поделиться → На экран «Домой».
       </p>
       <button type="button" className="ghost-btn" onClick={dismiss}>
         ясно
@@ -342,53 +397,56 @@ function DayPhotoStrip({
   activeId,
   onSelect,
   badge,
+  favorite,
 }: {
   looks: Look[]
   activeId: string
   onSelect: (id: string) => void
   badge?: string
+  favorite?: boolean
 }) {
-  const scrollRef = useRef<HTMLDivElement>(null)
-
-  if (looks.length === 1) {
-    return (
-      <div className="look-thumb">
-        <Photo blob={looks[0].photoBlob} alt={`Лук ${looks[0].date}`} />
-        {badge ? <span className="match-badge">{badge}</span> : null}
-      </div>
-    )
-  }
+  const active = looks.find((l) => l.id === activeId) ?? looks[0]
+  const multi = looks.length > 1
 
   return (
-    <div className="day-media">
-      <div className="day-swipe" ref={scrollRef}>
-        {looks.map((look) => (
-          <button
-            key={look.id}
-            type="button"
-            className="day-swipe-slide"
-            data-active={look.id === activeId}
-            onClick={() => onSelect(look.id)}
-            aria-label={look.time ? `лук в ${look.time}` : 'лук'}
-          >
-            <Photo blob={look.photoBlob} alt="" />
-          </button>
-        ))}
+    <div className={multi ? 'day-media' : undefined}>
+      <div className="look-thumb">
+        <Photo
+          key={active.id}
+          imgKey={active.id}
+          blob={active.photoBlob}
+          alt={`Лук ${active.date}${active.time ? ` ${active.time}` : ''}`}
+        />
+        {badge ? <span className="match-badge">{badge}</span> : null}
+        {favorite ? (
+          <span className="favorite-mark" aria-hidden>
+            ★
+          </span>
+        ) : null}
       </div>
-      <div className="day-thumbs">
-        {looks.map((look) => (
-          <button
-            key={look.id}
-            type="button"
-            className="day-thumb"
-            data-active={look.id === activeId}
-            onClick={() => onSelect(look.id)}
-          >
-            <Photo blob={look.photoBlob} alt="" />
-          </button>
-        ))}
-      </div>
-      {badge ? <span className="match-badge day-badge">{badge}</span> : null}
+      {multi ? (
+        <div className="day-thumbs" role="tablist" aria-label="фото за день">
+          {looks.map((look) => (
+            <button
+              key={look.id}
+              type="button"
+              role="tab"
+              className="day-thumb"
+              aria-selected={look.id === active.id}
+              data-active={look.id === active.id}
+              data-favorite={look.favorite === true}
+              onClick={() => onSelect(look.id)}
+            >
+              <Photo
+                key={look.id}
+                imgKey={look.id}
+                blob={look.photoBlob}
+                alt=""
+              />
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -399,6 +457,7 @@ function DayLookCard({
   reason,
   onFeedback,
   onFeedbackNote,
+  onFavorite,
   actions,
   style,
 }: {
@@ -407,11 +466,11 @@ function DayLookCard({
   reason?: string
   onFeedback: (id: string, f: Feedback) => void
   onFeedbackNote?: (id: string, note: string) => void
+  onFavorite?: (id: string, favorite: boolean) => void
   actions?: (active: Look) => ReactNode
   style?: CSSProperties
 }) {
   const [activeId, setActiveId] = useState(group.primary.id)
-  const [expanded, setExpanded] = useState(false)
 
   useEffect(() => {
     setActiveId(group.primary.id)
@@ -419,7 +478,7 @@ function DayLookCard({
 
   const active =
     group.looks.find((l) => l.id === activeId) ?? group.primary
-  const place = placeSummary(group)
+  const place = formatPlaceShort(active.placeName)
   const multi = group.looks.length > 1
 
   return (
@@ -427,54 +486,43 @@ function DayLookCard({
       <DayPhotoStrip
         looks={group.looks}
         activeId={active.id}
-        onSelect={(id) => {
-          setActiveId(id)
-          if (multi) setExpanded(true)
-        }}
+        onSelect={setActiveId}
         badge={badge}
+        favorite={active.favorite}
       />
       <div className="look-card-body">
-        <h3>
-          {formatDateRu(group.date, multi ? undefined : active.time)}
-          {multi ? (
-            <span className="day-count"> · {group.looks.length} фото</span>
-          ) : null}
-        </h3>
-        <p className="look-reason">
-          {place}
-          {reason ? ` · ${reason}` : ` · ${weatherLabel(active.weather)}`}
-          {active.note ? ` · ${active.note}` : ''}
-        </p>
-        <ItemTagsDisplay items={active.items} />
-        {multi && (
-          <button
-            type="button"
-            className="text-btn"
-            onClick={() => setExpanded((v) => !v)}
-          >
-            {expanded ? 'свернуть отзывы' : 'оценка по фото'}
-          </button>
-        )}
-        {(!multi || expanded) && (
-          <div className="day-feedback">
-            {multi && (
-              <p className="feedback-caption">
-                {active.time ? `фото ${active.time}` : 'это фото'}
-              </p>
-            )}
-            <FeedbackBar
-              value={active.feedback}
-              note={active.feedbackNote}
-              showNote={Boolean(onFeedbackNote)}
-              onChange={(f) => onFeedback(active.id, f)}
-              onNoteChange={
-                onFeedbackNote
-                  ? (n) => onFeedbackNote(active.id, n)
-                  : undefined
-              }
+        <div className="look-card-head">
+          <h3>
+            {formatDateRu(group.date, active.time)}
+            {multi ? (
+              <span className="day-count"> · {group.looks.length}</span>
+            ) : null}
+          </h3>
+          {onFavorite ? (
+            <FavoriteButton
+              active={active.favorite}
+              onToggle={() => onFavorite(active.id, !active.favorite)}
             />
-          </div>
-        )}
+          ) : null}
+        </div>
+        <p className="look-meta">
+          {place}
+          <span className="look-meta-sep"> · </span>
+          {formatFeels(active.weather.feelsLike)}
+        </p>
+        {reason ? <p className="look-reason">{reason}</p> : null}
+        <ItemTagsDisplay items={active.items} />
+        <FeedbackBar
+          value={active.feedback}
+          note={active.feedbackNote}
+          showNote={Boolean(onFeedbackNote)}
+          onChange={(f) => onFeedback(active.id, f)}
+          onNoteChange={
+            onFeedbackNote
+              ? (n) => onFeedbackNote(active.id, n)
+              : undefined
+          }
+        />
         {actions?.(active)}
       </div>
     </article>
@@ -549,7 +597,7 @@ function LocationEditor({
       },
       () => {
         setBusy(false)
-        setError('Не удалось получить геолокацию — лучше найди город')
+        setError('Не удалось определить место — найди город вручную')
         setEditing(true)
       },
       { enableHighAccuracy: false, timeout: 12000 },
@@ -559,7 +607,7 @@ function LocationEditor({
   return (
     <div className="place-card corner">
       <p className="place-card-label">{sourceLabel(place.source)}</p>
-      <p className="place-card-name">{place.placeName}</p>
+      <p className="place-card-name">{formatPlaceShort(place.placeName)}</p>
       {!editing ? (
         <div className="place-card-actions">
           <button
@@ -686,10 +734,10 @@ function CityOnboarding({
   return (
     <div className="onboard-overlay" role="dialog" aria-modal="true">
       <div className="onboard-sheet corner">
-        <div className="section-kicker">старт</div>
-        <h2 className="block-title">где ты сейчас?</h2>
+        <div className="section-kicker">город</div>
+        <h2 className="block-title">где ты?</h2>
         <p className="onboard-copy">
-          Город нужен для погоды «сегодня». Можно взять гео или найти вручную.
+          Нужен для погоды на сегодня. Можно взять гео или найти вручную.
         </p>
         <LocationEditor place={place} onChange={setPlace} />
         <button
@@ -698,7 +746,7 @@ function CityOnboarding({
           disabled={saving}
           onClick={() => void confirm()}
         >
-          {saving ? 'сохраняю…' : 'это мой город'}
+          {saving ? 'сохраняю…' : 'сохранить город'}
         </button>
       </div>
     </div>
@@ -710,6 +758,7 @@ function TodayScreen({
   settings,
   onFeedback,
   onFeedbackNote,
+  onFavorite,
   onAdd,
   onOpenSettings,
   onSettings,
@@ -718,6 +767,7 @@ function TodayScreen({
   settings: Settings
   onFeedback: (id: string, f: Feedback) => void
   onFeedbackNote: (id: string, note: string) => void
+  onFavorite: (id: string, favorite: boolean) => void
   onAdd: () => void
   onOpenSettings: (focus?: 'backup') => void
   onSettings: (s: Settings) => void
@@ -728,6 +778,7 @@ function TodayScreen({
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [showBackupHint, setShowBackupHint] = useState(false)
+  const [favoritesOnly, setFavoritesOnly] = useState(false)
 
   useEffect(() => {
     setShowBackupHint(shouldRemindBackup(settings, looks.length))
@@ -757,12 +808,17 @@ function TodayScreen({
     }
   }, [date, outingTime, settings.latitude, settings.longitude])
 
+  const pool = useMemo(
+    () => (favoritesOnly ? looks.filter((l) => l.favorite) : looks),
+    [looks, favoritesOnly],
+  )
+
   const ranked = useMemo(
     () =>
       weather
-        ? rankDayGroups(looks, weather, 8, outingTime || undefined)
+        ? rankDayGroups(pool, weather, 8, outingTime || undefined)
         : [],
-    [looks, weather, outingTime],
+    [pool, weather, outingTime],
   )
 
   const tips = weather ? weatherTips(weather) : []
@@ -771,6 +827,7 @@ function TodayScreen({
     () => looks.filter((l) => l.date === date),
     [looks, date],
   )
+  const hasFavorites = looks.some((l) => l.favorite)
   const traveling = Boolean(settings.travelPlace)
 
   async function dismissBackupHint() {
@@ -799,7 +856,7 @@ function TodayScreen({
 
   return (
     <>
-      <div className="section-kicker">атмосфера</div>
+      <div className="section-kicker">погода</div>
       <PwaInstallHint />
       <div className="control-row">
         <DatePicker value={date} onChange={setDate} />
@@ -825,16 +882,16 @@ function TodayScreen({
         <TimePicker
           value={outingTime}
           onChange={setOutingTime}
-          hint="сейчас выхожу"
+          hint="время выхода"
         />
       </div>
 
       {traveling && (
         <div className="soft-nudge corner travel-nudge">
           <p>
-            Временно: {settings.placeName}
+            Сейчас: {formatPlaceShort(settings.placeName)}
             {settings.homePlace
-              ? ` · дом — ${settings.homePlace.placeName}`
+              ? ` · дом — ${formatPlaceShort(settings.homePlace.placeName)}`
               : ''}
           </p>
           <button
@@ -842,21 +899,21 @@ function TodayScreen({
             className="ghost-btn"
             onClick={() => void returnHome()}
           >
-            вернуться домой
+            домой
           </button>
         </div>
       )}
 
       {showBackupHint && (
         <div className="soft-nudge corner">
-          <p>Пора сохранить запасную копию луков в GitHub.</p>
+          <p>Стоит сохранить копию луков — на случай смены телефона.</p>
           <div className="nudge-actions">
             <button
               type="button"
               className="olive-btn"
               onClick={() => onOpenSettings('backup')}
             >
-              как настроить
+              настроить
             </button>
             <button
               type="button"
@@ -872,7 +929,7 @@ function TodayScreen({
       {looksForDate.length > 0 && (
         <div className="soft-nudge corner recorded-nudge">
           <p>
-            Лук уже записан
+            Уже есть запись
             {looksForDate.length > 1
               ? ` · ${looksForDate.length} фото`
               : looksForDate[0].time
@@ -887,7 +944,7 @@ function TodayScreen({
 
       {needFeedback.length > 0 && (
         <div className="soft-nudge corner">
-          <p>В этой одежде было? — за последние дни без отметки.</p>
+          <p>Как было в этой одежде?</p>
           {needFeedback.slice(0, 2).map((look) => (
             <div key={look.id} className="nudge-look">
               <div className="nudge-look-thumb">
@@ -906,7 +963,7 @@ function TodayScreen({
       )}
 
       {loading && (
-        <p className="status loading-pulse">собираю профиль погоды…</p>
+        <p className="status loading-pulse">загружаю погоду…</p>
       )}
       {error && <p className="error">{error}</p>}
 
@@ -917,7 +974,7 @@ function TodayScreen({
             <div className="side">
               ощущается
               <br />
-              {settings.placeName}
+              {formatPlaceShort(settings.placeName)}
               <br />
               {formatDateRu(date)}
               {outingTime ? (
@@ -957,14 +1014,26 @@ function TodayScreen({
       <h2 className="block-title">что надеть</h2>
       {weather && !loading && looks.length > 0 && (
         <p className="rank-hint">
-          по похожей погоде{outingTime ? ` около ${outingTime}` : ''}:
-          ощущается, ветер, влажность, осадки
+          по похожим дням
+          {outingTime ? ` около ${outingTime}` : ''}
         </p>
+      )}
+      {hasFavorites && (
+        <div className="control-row filter-row">
+          <button
+            type="button"
+            className="ghost-btn"
+            data-active={favoritesOnly}
+            onClick={() => setFavoritesOnly((v) => !v)}
+          >
+            только ★
+          </button>
+        </div>
       )}
       {looks.length === 0 && (
         <div className="empty-actions">
           <p className="empty">
-            Пока нет луков. Добавь первый — и рекомендации появятся сами.
+            Пока пусто. Добавь первый лук — здесь появятся подсказки.
           </p>
           <button type="button" className="olive-btn" onClick={onAdd}>
             добавить лук
@@ -974,13 +1043,15 @@ function TodayScreen({
             className="ghost-btn"
             onClick={() => onOpenSettings('backup')}
           >
-            как сделать запасную копию
+            как сделать копию
           </button>
         </div>
       )}
       {weather && !loading && looks.length > 0 && ranked.length === 0 && (
         <p className="empty">
-          Нет луков за другие дни — добавь ещё образы, чтобы сравнить погоду.
+          {favoritesOnly
+            ? 'В избранном нет других дней — сними фильтр или отметь ★.'
+            : 'Нужны луки за другие дни — добавь ещё образы.'}
         </p>
       )}
       <div className="look-grid">
@@ -992,6 +1063,7 @@ function TodayScreen({
             reason={group.reason}
             onFeedback={onFeedback}
             onFeedbackNote={onFeedbackNote}
+            onFavorite={onFavorite}
             style={{ animationDelay: `${i * 50}ms` }}
           />
         ))}
@@ -1172,7 +1244,7 @@ function AddLookScreen({
   if (pendingFeedback) {
     return (
       <>
-        <div className="section-kicker">сохранено</div>
+        <div className="section-kicker">готово</div>
         <h2 className="block-title">в этой одежде было?</h2>
         <div className="form-stack">
           <div className="photo-drop corner has-photo">
@@ -1210,8 +1282,8 @@ function AddLookScreen({
 
   return (
     <>
-      <div className="section-kicker">новый лук</div>
-      <h2 className="block-title">записать образ</h2>
+      <div className="section-kicker">новый</div>
+      <h2 className="block-title">записать лук</h2>
       <div className="form-stack">
         <button
           type="button"
@@ -1220,8 +1292,8 @@ function AddLookScreen({
         >
           {preview && <img src={preview} alt="Превью лука" />}
           <div className="hint">
-            фото образа
-            <small>дата и место — из снимка, если есть</small>
+            фото
+            <small>дата и место подтянутся из снимка, если есть</small>
           </div>
         </button>
         <div className="photo-actions">
@@ -1290,7 +1362,7 @@ function AddLookScreen({
             id="look-note"
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder="пальто / кроссовки…"
+            placeholder="например: пальто, кроссовки"
           />
         </div>
         {status && <p className="status">{status}</p>}
@@ -1313,6 +1385,7 @@ function ArchiveScreen({
   settings,
   onFeedback,
   onFeedbackNote,
+  onFavorite,
   onDelete,
   onUpdated,
   onAdd,
@@ -1321,6 +1394,7 @@ function ArchiveScreen({
   settings: Settings
   onFeedback: (id: string, f: Feedback) => void
   onFeedbackNote: (id: string, note: string) => void
+  onFavorite: (id: string, favorite: boolean) => void
   onDelete: (id: string) => void
   onUpdated: () => void
   onAdd: () => void
@@ -1329,8 +1403,14 @@ function ArchiveScreen({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [locBusy, setLocBusy] = useState(false)
   const [locError, setLocError] = useState<string | null>(null)
+  const [favoritesOnly, setFavoritesOnly] = useState(false)
 
-  const dayGroups = useMemo(() => groupLooksByDate(looks), [looks])
+  const filtered = useMemo(
+    () => (favoritesOnly ? looks.filter((l) => l.favorite) : looks),
+    [looks, favoritesOnly],
+  )
+  const dayGroups = useMemo(() => groupLooksByDate(filtered), [filtered])
+  const hasFavorites = looks.some((l) => l.favorite)
 
   async function applyPlace(look: Look, next: PlaceState) {
     setLocBusy(true)
@@ -1363,13 +1443,28 @@ function ArchiveScreen({
     <>
       <div className="section-kicker">архив</div>
       <h2 className="block-title">все луки</h2>
+      {hasFavorites && (
+        <div className="control-row filter-row">
+          <button
+            type="button"
+            className="ghost-btn"
+            data-active={favoritesOnly}
+            onClick={() => setFavoritesOnly((v) => !v)}
+          >
+            только ★
+          </button>
+        </div>
+      )}
       {looks.length === 0 && (
         <div className="empty-actions">
-          <p className="empty">Архив пуст — начни с сегодняшнего образа.</p>
+          <p className="empty">Пока пусто — добавь первый лук.</p>
           <button type="button" className="olive-btn" onClick={onAdd}>
             добавить лук
           </button>
         </div>
+      )}
+      {looks.length > 0 && dayGroups.length === 0 && (
+        <p className="empty">В избранном пусто — отметь ★ на карточке.</p>
       )}
       <div className="look-grid archive-grid">
         {dayGroups.map((group) => (
@@ -1379,6 +1474,7 @@ function ArchiveScreen({
             badge={formatFeels(group.primary.weather.feelsLike)}
             onFeedback={onFeedback}
             onFeedbackNote={onFeedbackNote}
+            onFavorite={onFavorite}
             actions={(active) => {
               const place: PlaceState = {
                 placeName: active.placeName || settings.placeName,
@@ -1406,7 +1502,7 @@ function ArchiveScreen({
                         className="text-btn"
                         onClick={() => setEditingId(null)}
                       >
-                        закрыть место
+                        готово
                       </button>
                     </>
                   ) : (
@@ -1464,136 +1560,469 @@ function ArchiveScreen({
   )
 }
 
-function BackupSetupGuide({ open }: { open: boolean }) {
-  const [expanded, setExpanded] = useState(open)
-  const [detailsOpen, setDetailsOpen] = useState(false)
+function formatBackupWhen(ts?: number): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const now = new Date()
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  const time = d.toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  if (sameDay) return `сегодня ${time}`
+  return `${d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} ${time}`
+}
+
+type BackupChecks = {
+  account: boolean
+  token: boolean
+  auto: boolean
+  copy: boolean
+  verified: boolean
+}
+
+function backupChecks(settings: Settings): BackupChecks {
+  const token = Boolean(settings.githubToken?.trim())
+  return {
+    account: token || Boolean(settings.githubBackupVerifiedAt),
+    token,
+    auto: isAutoBackupEnabled(settings),
+    copy: Boolean(settings.githubGistId?.trim() || settings.lastBackupAt),
+    verified: Boolean(settings.githubBackupVerifiedAt),
+  }
+}
+
+function nextBackupGap(checks: BackupChecks): string | null {
+  if (!checks.token) return 'сохранить ключ'
+  if (!checks.copy) return 'сохранить первую копию'
+  if (!checks.auto) return 'включить автосохранение'
+  if (!checks.verified) return 'проверить копию'
+  return null
+}
+
+function BackupPanel({
+  settings,
+  onSettings,
+  openWizard,
+  autoError,
+}: {
+  settings: Settings
+  onSettings: (s: Settings) => void
+  openWizard: boolean
+  autoError?: string | null
+}) {
   const ref = useRef<HTMLDivElement>(null)
+  const checks = backupChecks(settings)
+  const gap = nextBackupGap(checks)
+  const setupDone = checks.token && checks.copy && checks.auto
+  const hasCopy = checks.token && checks.copy
+  const autoOn = settings.githubAutoBackup !== false
+  const [wizard, setWizard] = useState(false)
+  const [step, setStep] = useState(1)
+  const [token, setToken] = useState(settings.githubToken ?? '')
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [detailsOpen, setDetailsOpen] = useState(false)
 
   useEffect(() => {
-    if (open) {
-      setExpanded(true)
-      requestAnimationFrame(() => {
-        ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      })
+    setToken(settings.githubToken ?? '')
+  }, [settings.githubToken])
+
+  useEffect(() => {
+    if (!openWizard) return
+    setWizard(true)
+    if (!checks.token) setStep(1)
+    else if (!checks.copy) setStep(3)
+    else setStep(2)
+    requestAnimationFrame(() => {
+      ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }, [openWizard, checks.token, checks.copy])
+
+  async function persistSettings(next: Settings, msg?: string) {
+    await saveSettings(next)
+    onSettings(next)
+    if (msg) setStatus(msg)
+  }
+
+  async function saveAndValidateToken() {
+    setBusy(true)
+    setError(null)
+    setStatus(null)
+    try {
+      const { login } = await validateGithubToken(token)
+      const next: Settings = {
+        ...settings,
+        githubToken: token.trim(),
+        githubAutoBackup: settings.githubAutoBackup ?? true,
+      }
+      await persistSettings(next, `ключ принят · ${login}`)
+      setStep(3)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
     }
-  }, [open])
+  }
+
+  async function saveFirstCopy() {
+    setBusy(true)
+    setError(null)
+    setStatus(null)
+    try {
+      if (token.trim() && token.trim() !== (settings.githubToken ?? '')) {
+        await validateGithubToken(token)
+        await saveSettings({
+          ...settings,
+          githubToken: token.trim(),
+          githubAutoBackup: true,
+        })
+      }
+      const result = await saveBackupToGithub()
+      const refreshed = await getSettings()
+      const next: Settings = {
+        ...refreshed,
+        githubAutoBackup: true,
+        githubBackupVerifiedAt: Date.now(),
+      }
+      await persistSettings(
+        next,
+        result.recompressed
+          ? 'копия сохранена (фото сжаты)'
+          : 'копия сохранена',
+      )
+      setWizard(false)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveNow() {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await saveBackupToGithub()
+      const refreshed = await getSettings()
+      onSettings({
+        ...refreshed,
+        githubBackupVerifiedAt: Date.now(),
+      })
+      await saveSettings({
+        ...refreshed,
+        githubBackupVerifiedAt: Date.now(),
+      })
+      setStatus(
+        result.recompressed ? 'сохранено · фото сжаты' : 'сохранено',
+      )
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function restoreNow() {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await restoreBackupFromGithub()
+      suppressAutoBackup()
+      setStatus(`восстановлено: ${result.imported}, всего ${result.total}`)
+      window.location.reload()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function runVerify() {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await verifyGithubBackup()
+      const refreshed = await getSettings()
+      onSettings(refreshed)
+      setStatus(
+        result.hasCopy
+          ? `проверено · ${result.login}`
+          : `ключ ок · ${result.login} — сохрани первую копию`,
+      )
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function setAutoBackup(on: boolean) {
+    const next: Settings = { ...settings, githubAutoBackup: on }
+    await persistSettings(
+      next,
+      on ? 'автосохранение включено' : 'автосохранение выключено',
+    )
+  }
+
+  const bannerKind = autoError
+    ? 'warn'
+    : setupDone
+      ? 'ok'
+      : checks.token
+        ? 'progress'
+        : 'idle'
+
+  const bannerText = autoError
+    ? `Автосохранение не удалось: ${autoError}`
+    : setupDone
+      ? 'Всё ок — копии сохраняются сами'
+      : gap
+        ? `Осталось: ${gap}`
+        : 'Копия ещё не настроена'
 
   return (
-    <div className="backup-guide" ref={ref} id="backup-guide">
-      <button
-        type="button"
-        className="backup-guide-toggle"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((v) => !v)}
-      >
-        <span className="section-kicker">инструкция</span>
-        <span className="backup-guide-title">
-          как сделать запасную копию
-          <span className="backup-guide-chevron" data-open={expanded}>
-            ▾
-          </span>
-        </span>
-      </button>
-      {expanded && (
-        <div className="backup-guide-body">
-          <p className="backup-guide-lead">
-            Бэкап — это запасная копия твоих луков в аккаунте GitHub. Как
-            закрытая папка в облаке: только ты её видишь. Если телефон
-            сломается или купишь новый — луки можно вернуть.
-          </p>
+    <div className="backup-panel" ref={ref} id="backup-guide">
+      <h3 className="settings-sub">запасная копия</h3>
 
-          <ol className="backup-guide-steps">
-            <li>
-              <strong>1. Аккаунт GitHub</strong>
-              Нужен бесплатный аккаунт. Если его ещё нет — зарегистрируйся
-              (это бесплатно).
+      <div className="backup-banner" data-kind={bannerKind}>
+        <p>{bannerText}</p>
+        {setupDone && settings.lastBackupAt ? (
+          <p className="backup-banner-meta">
+            последняя копия: {formatBackupWhen(settings.lastBackupAt)}
+          </p>
+        ) : null}
+        {!setupDone && !wizard ? (
+          <button
+            type="button"
+            className="olive-btn"
+            onClick={() => {
+              setWizard(true)
+              setStep(checks.token ? (checks.copy ? 2 : 3) : 1)
+              setError(null)
+              setStatus(null)
+            }}
+          >
+            настроить за 3 шага
+          </button>
+        ) : null}
+        {autoError ? (
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={() => {
+              setWizard(true)
+              setStep(2)
+            }}
+          >
+            исправить
+          </button>
+        ) : null}
+      </div>
+
+      <ul className="backup-checklist" aria-label="статус копии">
+        {(
+          [
+            ['account', 'аккаунт GitHub', checks.account || wizard],
+            ['token', 'ключ сохранён', checks.token],
+            ['auto', 'автосохранение', checks.auto],
+            ['copy', 'первая копия', checks.copy],
+            ['verified', 'проверено', checks.verified],
+          ] as const
+        ).map(([id, label, done]) => (
+          <li key={id} data-done={done}>
+            <span aria-hidden>{done ? '✓' : '○'}</span>
+            {label}
+          </li>
+        ))}
+      </ul>
+
+      {checks.token ? (
+        <label className="auto-backup-row">
+          <input
+            type="checkbox"
+            checked={autoOn}
+            onChange={(e) => void setAutoBackup(e.target.checked)}
+          />
+          <span className="auto-backup-box" aria-hidden />
+          <span className="auto-backup-label">автосохранение копий</span>
+        </label>
+      ) : null}
+
+      {wizard && (
+        <div className="backup-wizard">
+          <p className="backup-wizard-step">шаг {Math.min(step, 3)}/3</p>
+
+          {step === 1 && (
+            <div className="backup-wizard-body">
+              <p>
+                Нужен бесплатный вход на github.com. Если аккаунта нет —
+                зарегистрируйся, это бесплатно.
+              </p>
               <a
-                className="backup-guide-cta olive-btn"
+                className="olive-btn backup-cta"
                 href="https://github.com/login"
                 target="_blank"
                 rel="noreferrer"
               >
                 открыть GitHub
               </a>
-            </li>
-            <li>
-              <strong>2. Создай ключ-пароль</strong>
-              Открой эту страницу — она создаёт секретный ключ для look.:
+              <p>
+                Потом создай ключ-пароль для look. На странице отметь только
+                право <code>gist</code>, нажми Generate token и сразу скопируй
+                длинную строку (её показывают один раз).
+              </p>
               <a
-                className="backup-guide-cta olive-btn"
+                className="olive-btn backup-cta"
                 href="https://github.com/settings/tokens/new"
                 target="_blank"
                 rel="noreferrer"
               >
-                создать ключ на GitHub
+                создать ключ
               </a>
-              <p className="backup-guide-step-text">
-                На странице поставь галочку только у <code>gist</code> — это
-                разрешение сохранить копию. Потом нажми Generate token и
-                скопируй длинный пароль (его показывают один раз).
+              <button
+                type="button"
+                className="text-btn"
+                onClick={() => setDetailsOpen((v) => !v)}
+              >
+                {detailsOpen ? 'скрыть подсказки' : 'как заполнить страницу'}
+              </button>
+              {detailsOpen ? (
+                <ul className="backup-hints">
+                  <li>Note — любое имя, например look</li>
+                  <li>Expiration — без срока или длинный</li>
+                  <li>В правах галочка только у gist</li>
+                  <li>Скопируй строку ghp_… сразу</li>
+                </ul>
+              ) : null}
+              <button
+                type="button"
+                className="olive-btn"
+                onClick={() => setStep(2)}
+              >
+                ключ скопирован — дальше
+              </button>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="backup-wizard-body">
+              <p>Вставь ключ сюда. Мы сразу проверим, подходит ли он.</p>
+              <div className="field">
+                <label htmlFor="gh-token-wiz">ключ</label>
+                <input
+                  id="gh-token-wiz"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  placeholder="начинается с ghp_…"
+                />
+              </div>
+              <button
+                type="button"
+                className="olive-btn"
+                disabled={busy || !token.trim()}
+                onClick={() => void saveAndValidateToken()}
+              >
+                {busy ? 'проверяю…' : 'сохранить ключ'}
+              </button>
+              <button
+                type="button"
+                className="ghost-btn"
+                onClick={() => setStep(1)}
+              >
+                назад
+              </button>
+            </div>
+          )}
+
+          {step === 3 && (
+            <div className="backup-wizard-body">
+              <p>
+                Последний шаг: сохранить первую копию луков. После этого
+                look. будет обновлять её сам.
               </p>
               <button
                 type="button"
-                className="backup-guide-more-toggle"
-                aria-expanded={detailsOpen}
-                onClick={() => setDetailsOpen((v) => !v)}
+                className="olive-btn"
+                disabled={busy}
+                onClick={() => void saveFirstCopy()}
               >
-                {detailsOpen ? 'скрыть подробности' : 'подробнее про страницу'}
+                {busy ? 'сохраняю…' : 'сохранить первую копию сейчас'}
               </button>
-              {detailsOpen && (
-                <ul className="backup-guide-details">
-                  <li>
-                    В поле Note напиши любое имя, например «look» — это
-                    подпись для себя.
-                  </li>
-                  <li>
-                    Expiration (срок) можно оставить без срока или выбрать
-                    длинный срок.
-                  </li>
-                  <li>
-                    В списке прав отметь только gist. Другие галочки не нужны.
-                  </li>
-                  <li>
-                    Generate token → появится длинная строка, начинающаяся с
-                    ghp_… Скопируй её сразу: потом GitHub её больше не
-                    покажет.
-                  </li>
-                </ul>
-              )}
-            </li>
-            <li>
-              <strong>3. Вставь ключ в look.</strong>
-              Поле «ключ от GitHub» ниже → вставь скопированное → «сохранить
-              ключ» → включи «сохранять копию автоматически».
-            </li>
-            <li>
-              <strong>4. Готово</strong>
-              Копии начинают сохраняться сами после новых луков и правок. На
-              новом телефоне: открой look. → «ещё» → вставь тот же ключ →
-              «восстановить из GitHub». Старые луки на телефоне не сотрутся.
-            </li>
-          </ol>
+              <button
+                type="button"
+                className="ghost-btn"
+                onClick={() => setStep(2)}
+              >
+                назад
+              </button>
+            </div>
+          )}
 
-          <div className="backup-guide-dont">
-            <p className="backup-guide-dont-title">чего не делать</p>
-            <ul>
-              <li>
-                Не клади фото и луки в публичный код look-weather — туда
-                только программа, не твои снимки.
-              </li>
-              <li>
-                Не отправляй ключ никому и не публикуй его. У кого ключ — у
-                того доступ к твоей копии.
-              </li>
-            </ul>
-          </div>
-
-          <p className="backup-guide-footnote">
-            Технически копия лежит как закрытый файл в аккаунте GitHub. Знать
-            слово «gist» не обязательно.
-          </p>
+          <button
+            type="button"
+            className="text-btn"
+            onClick={() => setWizard(false)}
+          >
+            закрыть мастер
+          </button>
         </div>
       )}
+
+      {hasCopy && !wizard && (
+        <div className="backup-ready">
+          <div className="settings-actions">
+            <button
+              type="button"
+              className="olive-btn"
+              disabled={busy}
+              onClick={() => void saveNow()}
+            >
+              {busy ? '…' : 'сохранить сейчас'}
+            </button>
+            <button
+              type="button"
+              className="solid-btn"
+              disabled={busy}
+              onClick={() => void restoreNow()}
+            >
+              восстановить на этом телефоне
+            </button>
+          </div>
+          <button
+            type="button"
+            className="ghost-btn"
+            disabled={busy}
+            onClick={() => void runVerify()}
+          >
+            проверить
+          </button>
+          <button
+            type="button"
+            className="text-btn"
+            onClick={() => {
+              setWizard(true)
+              setStep(2)
+            }}
+          >
+            сменить ключ
+          </button>
+        </div>
+      )}
+
+      {status && <p className="status">{status}</p>}
+      {error && <p className="error">{error}</p>}
+      <p className="field-hint">
+        Не публикуй ключ и не клади луки в публичный код. На новом телефоне:
+        вставь тот же ключ → восстановить.
+      </p>
     </div>
   )
 }
@@ -1603,25 +2032,24 @@ function SettingsScreen({
   looksCount,
   onSettings,
   focusBackup = false,
+  autoError = null,
 }: {
   settings: Settings
   looksCount: number
   onSettings: (s: Settings) => void
   focusBackup?: boolean
+  autoError?: string | null
 }) {
   const [place, setPlace] = useState<PlaceState>({
     ...settings,
     source: 'settings',
   })
   const [travelMode, setTravelMode] = useState(false)
-  const [token, setToken] = useState(settings.githubToken ?? '')
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     setPlace({ ...settings, source: 'settings' })
-    setToken(settings.githubToken ?? '')
   }, [settings])
 
   async function persistHome(next: PlaceState) {
@@ -1644,7 +2072,6 @@ function SettingsScreen({
           travelPlace: undefined,
           cityConfirmed: true,
         }
-    // If not traveling, active city = home
     if (!settings.travelPlace) {
       saved.placeName = home.placeName
       saved.latitude = home.latitude
@@ -1653,7 +2080,7 @@ function SettingsScreen({
     await saveSettings(saved)
     onSettings(saved)
     scheduleAutoBackup('settings')
-    setStatus(`домашний город: ${next.placeName}`)
+    setStatus(`домашний город: ${formatPlaceShort(next.placeName)}`)
     setError(null)
     setTravelMode(false)
   }
@@ -1684,7 +2111,7 @@ function SettingsScreen({
     await saveSettings(saved)
     onSettings(saved)
     scheduleAutoBackup('settings')
-    setStatus(`временно: ${next.placeName}`)
+    setStatus(`временно: ${formatPlaceShort(next.placeName)}`)
     setError(null)
     setTravelMode(false)
   }
@@ -1702,41 +2129,7 @@ function SettingsScreen({
     setPlace({ ...home, source: 'settings' })
     await saveSettings(saved)
     onSettings(saved)
-    setStatus(`дома: ${home.placeName}`)
-    setError(null)
-  }
-
-  async function saveToken() {
-    const trimmed = token.trim()
-    const next: Settings = {
-      ...settings,
-      githubToken: trimmed || undefined,
-      githubAutoBackup: trimmed
-        ? (settings.githubAutoBackup ?? true)
-        : settings.githubAutoBackup,
-    }
-    await saveSettings(next)
-    onSettings(next)
-    setStatus(
-      trimmed
-        ? 'ключ сохранён на этом телефоне'
-        : 'ключ удалён с телефона',
-    )
-    setError(null)
-  }
-
-  async function setAutoBackup(on: boolean) {
-    const next: Settings = {
-      ...settings,
-      githubAutoBackup: on,
-    }
-    await saveSettings(next)
-    onSettings(next)
-    setStatus(
-      on
-        ? 'автосохранение копии включено'
-        : 'автосохранение копии выключено',
-    )
+    setStatus(`дома: ${formatPlaceShort(home.placeName)}`)
     setError(null)
   }
 
@@ -1746,7 +2139,7 @@ function SettingsScreen({
       await shareOrDownloadBackup()
       const next = await markBackupDone(looksCount)
       onSettings(next)
-      setStatus('бэкап готов — сохрани в Файлы / iCloud')
+      setStatus('файл готов — сохрани в Файлы / iCloud')
     } catch {
       setError('Не удалось экспортировать')
     }
@@ -1767,65 +2160,23 @@ function SettingsScreen({
     }
   }
 
-  async function githubSave() {
-    setBusy(true)
-    setError(null)
-    try {
-      if (token.trim() !== (settings.githubToken ?? '')) {
-        await saveSettings({ ...settings, githubToken: token.trim() })
-      }
-      const result = await saveBackupToGithub()
-      const refreshed = await getSettings()
-      onSettings(refreshed)
-      setStatus(
-        result.recompressed
-          ? 'сохранено в GitHub — фото сжаты сильнее'
-          : 'сохранено в GitHub',
-      )
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function githubRestore() {
-    setBusy(true)
-    setError(null)
-    try {
-      if (token.trim() !== (settings.githubToken ?? '')) {
-        await saveSettings({ ...settings, githubToken: token.trim() })
-      }
-      const result = await restoreBackupFromGithub()
-      suppressAutoBackup()
-      setStatus(
-        `восстановлено: ${result.imported} · всего: ${result.total}`,
-      )
-      window.location.reload()
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const autoOn = isAutoBackupEnabled(settings)
   const traveling = Boolean(settings.travelPlace)
-  const homeLabel =
+  const homeLabel = formatPlaceShort(
     settings.homePlace?.placeName ??
-    (traveling ? 'не задан' : settings.placeName)
+      (traveling ? undefined : settings.placeName),
+  )
 
   return (
     <>
       <div className="section-kicker">настройки</div>
-      <h2 className="block-title">город и бэкап</h2>
+      <h2 className="block-title">город и копия</h2>
       <div className="settings-stack">
         <p>
           Домашний город — для «сегодня» и луков без GPS. В поездке можно
-          временно сменить город, не теряя домашний.
+          временно сменить город.
         </p>
         <p className="meta-chip">
-          сейчас · {settings.placeName}
+          сейчас · {formatPlaceShort(settings.placeName)}
           {traveling ? ' · в поездке' : ''}
         </p>
         <p className="field-hint">дом · {homeLabel}</p>
@@ -1877,72 +2228,12 @@ function SettingsScreen({
           </div>
         )}
 
-        <h3 className="settings-sub">запасная копия на GitHub</h3>
-        <p className="field-hint">
-          Закрытая копия луков в твоём аккаунте GitHub — не в публичном коде
-          приложения.
-        </p>
-        <BackupSetupGuide open={focusBackup} />
-
-        <div className="field">
-          <label htmlFor="gh-token">ключ от GitHub</label>
-          <input
-            id="gh-token"
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="длинный пароль, начинается с ghp_…"
-          />
-        </div>
-        <p className="field-hint">
-          Вставь ключ из шага 2 инструкции выше.
-          {settings.githubGistId
-            ? ' Копия на GitHub уже есть — можно восстанавливать.'
-            : ''}
-        </p>
-        <button
-          type="button"
-          className="ghost-btn"
-          onClick={() => void saveToken()}
-        >
-          сохранить ключ
-        </button>
-        <label className="auto-backup-row">
-          <input
-            type="checkbox"
-            checked={autoOn}
-            disabled={!settings.githubToken?.trim()}
-            onChange={(e) => void setAutoBackup(e.target.checked)}
-          />
-          <span>
-            сохранять копию автоматически
-            <span className="field-hint">
-              {settings.githubToken?.trim()
-                ? 'После новых луков и правок look. сам обновит копию на GitHub.'
-                : 'Сначала сохрани ключ.'}
-            </span>
-          </span>
-        </label>
-        <div className="settings-actions">
-          <button
-            type="button"
-            className="olive-btn"
-            disabled={busy}
-            onClick={() => void githubSave()}
-          >
-            {busy ? '…' : 'сохранить копию сейчас'}
-          </button>
-          <button
-            type="button"
-            className="solid-btn"
-            disabled={busy}
-            onClick={() => void githubRestore()}
-          >
-            восстановить из GitHub
-          </button>
-        </div>
+        <BackupPanel
+          settings={settings}
+          onSettings={onSettings}
+          openWizard={focusBackup}
+          autoError={autoError}
+        />
 
         <h3 className="settings-sub">файлы</h3>
         <p className="field-hint">
@@ -2014,6 +2305,12 @@ export default function App() {
     await refresh()
   }
 
+  async function onFavorite(id: string, favorite: boolean) {
+    await updateLook(id, { favorite: favorite || undefined })
+    scheduleAutoBackup('feedback')
+    await refresh()
+  }
+
   async function onDelete(id: string) {
     await deleteLook(id)
     await refresh()
@@ -2058,6 +2355,7 @@ export default function App() {
             settings={settings}
             onFeedback={onFeedback}
             onFeedbackNote={onFeedbackNote}
+            onFavorite={onFavorite}
             onAdd={() => setTab('add')}
             onOpenSettings={openSettings}
             onSettings={setSettings}
@@ -2078,6 +2376,7 @@ export default function App() {
             settings={settings}
             onFeedback={onFeedback}
             onFeedbackNote={onFeedbackNote}
+            onFavorite={onFavorite}
             onDelete={onDelete}
             onUpdated={() => void refresh()}
             onAdd={() => setTab('add')}
