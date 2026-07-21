@@ -139,8 +139,8 @@ async function runAutoBackup(): Promise<void> {
     notify({
       kind: 'ok',
       message: result.recompressed
-        ? 'сохранено в GitHub — фото сжаты'
-        : 'сохранено в GitHub',
+        ? 'сохранено — фото сжаты'
+        : 'сохранено',
     })
     if (clearOkTimer) clearTimeout(clearOkTimer)
     clearOkTimer = setTimeout(() => {
@@ -149,7 +149,7 @@ async function runAutoBackup(): Promise<void> {
   } catch (e) {
     notify({
       kind: 'error',
-      message: (e as Error).message || 'не удалось сделать бэкап',
+      message: (e as Error).message || 'не удалось сохранить копию',
     })
   } finally {
     inFlight = false

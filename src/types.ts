@@ -1,4 +1,42 @@
-export type Feedback = 'too_cold' | 'ok' | 'too_hot'
+/** Comfort in this outfit that day. Symmetric around ok. */
+export type Feedback = 'cold' | 'cool' | 'ok' | 'warm' | 'hot'
+
+/** Pre-scale values still present in older backups / IndexedDB. */
+export type LegacyFeedback = 'too_cold' | 'too_hot'
+
+export const FEEDBACK_STEPS: Array<{ id: Feedback; label: string }> = [
+  { id: 'cold', label: 'холодно' },
+  { id: 'cool', label: 'прохладно' },
+  { id: 'ok', label: 'норм' },
+  { id: 'warm', label: 'тепловато' },
+  { id: 'hot', label: 'жарко' },
+]
+
+export const FEEDBACK_LABEL: Record<Feedback, string> = {
+  cold: 'холодно',
+  cool: 'прохладно',
+  ok: 'норм',
+  warm: 'тепловато',
+  hot: 'жарко',
+}
+
+/**
+ * Map any stored feedback (old 3-way or new 5-way) to the current scale.
+ * Returns undefined for missing / unknown values.
+ */
+export function normalizeFeedback(raw: unknown): Feedback | undefined {
+  if (raw === 'too_cold' || raw === 'cold') return 'cold'
+  if (raw === 'cool') return 'cool'
+  if (raw === 'ok') return 'ok'
+  if (raw === 'warm') return 'warm'
+  if (raw === 'too_hot' || raw === 'hot') return 'hot'
+  if (raw === -2 || raw === '-2') return 'cold'
+  if (raw === -1 || raw === '-1') return 'cool'
+  if (raw === 0 || raw === '0') return 'ok'
+  if (raw === 1 || raw === '1') return 'warm'
+  if (raw === 2 || raw === '2') return 'hot'
+  return undefined
+}
 
 export type LocationSource = 'photo' | 'settings' | 'search' | 'geo'
 
@@ -44,6 +82,8 @@ export type Look = {
   feedback?: Feedback
   /** Optional short comfort note */
   feedbackNote?: string
+  /** Starred look — mild boost when weather-similar */
+  favorite?: boolean
 }
 
 export type LookExport = Omit<Look, 'photoBlob'> & {
@@ -72,6 +112,8 @@ export type Settings = Place & {
   looksCountAtBackup?: number
   /** When user dismissed backup reminder */
   backupReminderDismissedAt?: number
+  /** Last successful «проверить» / token+copy ping */
+  githubBackupVerifiedAt?: number
 }
 
 export type Tab = 'today' | 'add' | 'archive' | 'settings'

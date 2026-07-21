@@ -29,6 +29,80 @@ function authHeaders(token: string): HeadersInit {
   }
 }
 
+export type TokenCheckResult = {
+  login: string
+}
+
+/** Lightweight PAT check — GET /user. Throws with plain Russian errors. */
+export async function validateGithubToken(
+  token: string,
+): Promise<TokenCheckResult> {
+  const trimmed = token.trim()
+  if (!trimmed) {
+    throw new Error('Вставь ключ в поле')
+  }
+  if (!trimmed.startsWith('ghp_') && !trimmed.startsWith('github_pat_')) {
+    throw new Error(
+      'Это не похоже на ключ GitHub. Он обычно начинается с ghp_',
+    )
+  }
+
+  const res = await fetch('https://api.github.com/user', {
+    headers: authHeaders(trimmed),
+  })
+  if (res.status === 401 || res.status === 403) {
+    throw new Error(
+      'Ключ не подошёл. Создай новый: в правах отметь только gist, скопируй сразу.',
+    )
+  }
+  if (!res.ok) {
+    throw new Error(`GitHub не ответил (${res.status}). Попробуй ещё раз.`)
+  }
+  const data = (await res.json()) as { login?: string }
+  if (!data.login) {
+    throw new Error('Ключ не подошёл')
+  }
+  return { login: data.login }
+}
+
+/**
+ * Confirm token still works and (if present) the saved copy is reachable.
+ * Does not import looks — read-only ping.
+ */
+export async function verifyGithubBackup(): Promise<{
+  login: string
+  hasCopy: boolean
+}> {
+  const settings = await getSettings()
+  const token = settings.githubToken?.trim()
+  if (!token) {
+    throw new Error('Сначала сохрани ключ')
+  }
+  const { login } = await validateGithubToken(token)
+  const gistId = settings.githubGistId?.trim()
+  let hasCopy = false
+  if (gistId) {
+    const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+      headers: authHeaders(token),
+    })
+    if (res.status === 404) {
+      throw new Error(
+        'Копия на GitHub не найдена. Нажми «сохранить сейчас» ещё раз.',
+      )
+    }
+    if (!res.ok) {
+      throw new Error(`Не удалось проверить копию (${res.status})`)
+    }
+    hasCopy = true
+  }
+  const next: Settings = {
+    ...settings,
+    githubBackupVerifiedAt: Date.now(),
+  }
+  await saveSettings(next)
+  return { login, hasCopy }
+}
+
 async function buildSizedBackup(): Promise<{
   json: string
   recompressed: boolean
@@ -91,7 +165,7 @@ export async function saveBackupToGithub(): Promise<GithubBackupResult> {
     const err = (await res.json().catch(() => ({}))) as GistResponse
     if (res.status === 401 || res.status === 403) {
       throw new Error(
-        'Ключ не принят. Создай новый по инструкции: галочка только у gist.',
+        'Ключ не принят. Создай новый: в правах отметь только gist.',
       )
     }
     if (res.status === 404 && gistId) {

@@ -62,7 +62,7 @@ describe('groupLooksByDate', () => {
     expect(pickPrimaryLook([morning, evening], '08:00').id).toBe('m')
   })
 
-  it('placeSummary shows +N ещё on conflict', () => {
+  it('placeSummary says N места when mixed', () => {
     const a = look({
       id: 'a',
       date: '2026-07-10',
@@ -78,7 +78,6 @@ describe('groupLooksByDate', () => {
       locationSource: 'settings',
     })
     const group = groupLooksByDate([a, b], '09:00')[0]
-    expect(placeSummary(group)).toMatch(/Москва/)
-    expect(placeSummary(group)).toMatch(/\+1 ещё/)
+    expect(placeSummary(group)).toBe('2 места')
   })
 })

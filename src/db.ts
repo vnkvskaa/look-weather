@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie'
 import type { Look, Settings } from './types'
+import { normalizeFeedback } from './types'
 
 const DEFAULT_SETTINGS: Settings = {
   placeName: 'Москва',
@@ -41,16 +42,23 @@ export async function saveSettings(settings: Settings): Promise<void> {
   await db.meta.put({ key: 'settings', value: settings })
 }
 
-export async function listLooks(): Promise<Look[]> {
-  const rows = await db.looks.orderBy('date').reverse().toArray()
-  const settings = await getSettings()
-  return rows.map((look) => ({
+function normalizeLook(look: Look, settings: Settings): Look {
+  const feedback = normalizeFeedback(look.feedback)
+  return {
     ...look,
     placeName: look.placeName || settings.placeName,
     latitude: look.latitude ?? settings.latitude,
     longitude: look.longitude ?? settings.longitude,
     locationSource: look.locationSource ?? 'settings',
-  }))
+    feedback,
+    favorite: look.favorite === true ? true : undefined,
+  }
+}
+
+export async function listLooks(): Promise<Look[]> {
+  const rows = await db.looks.orderBy('date').reverse().toArray()
+  const settings = await getSettings()
+  return rows.map((look) => normalizeLook(look, settings))
 }
 
 export async function addLook(look: Look): Promise<void> {

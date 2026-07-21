@@ -134,10 +134,26 @@ export async function searchPlaces(query: string) {
   if (!res.ok) throw new Error('Не удалось найти город')
   const data = (await res.json()) as GeocodeResult
   return (data.results ?? []).map((r) => ({
-    name: [r.name, r.admin1, r.country].filter(Boolean).join(', '),
+    name: formatPlaceShort([r.name, r.country].filter(Boolean).join(', ')),
     latitude: r.latitude,
     longitude: r.longitude,
   }))
+}
+
+/**
+ * Display place as «город, страна» — drop region/admin middle parts.
+ * Works for fresh geocode and older longer strings already stored.
+ */
+export function formatPlaceShort(name?: string | null): string {
+  if (!name?.trim()) return '—'
+  const parts = name
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean)
+  if (parts.length === 0) return '—'
+  if (parts.length === 1) return parts[0]
+  if (parts.length === 2) return `${parts[0]}, ${parts[1]}`
+  return `${parts[0]}, ${parts[parts.length - 1]}`
 }
 
 /** Resolve a human place name for coordinates (photo GPS / device geo). */
@@ -159,17 +175,11 @@ export async function reverseGeocode(
     principalSubdivision?: string
     countryName?: string
   }
-  const name = [
-    data.city || data.locality,
-    data.principalSubdivision && data.principalSubdivision !== data.city
-      ? data.principalSubdivision
-      : null,
-    data.countryName,
-  ]
-    .filter(Boolean)
-    .join(', ')
+  const city = data.city || data.locality || data.principalSubdivision
+  const country = data.countryName
+  const raw = [city, country].filter(Boolean).join(', ')
   return {
-    name: name || `${latitude.toFixed(2)}, ${longitude.toFixed(2)}`,
+    name: formatPlaceShort(raw) || `${latitude.toFixed(2)}, ${longitude.toFixed(2)}`,
     latitude,
     longitude,
   }

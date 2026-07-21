@@ -1,5 +1,6 @@
 import { listLooks, mergeLooks, getSettings, saveSettings } from '../db'
 import type { Look, LookExport, Place, Settings } from '../types'
+import { normalizeFeedback } from '../types'
 import { base64ToBlob, blobToBase64, compressImage } from './media'
 
 export type BackupPayload = {
@@ -32,6 +33,7 @@ export function settingsForBackup(settings: Settings): Settings {
     lastBackupAt: settings.lastBackupAt,
     looksCountAtBackup: settings.looksCountAtBackup,
     backupReminderDismissedAt: settings.backupReminderDismissedAt,
+    githubBackupVerifiedAt: settings.githubBackupVerifiedAt,
   }
 }
 
@@ -87,7 +89,7 @@ export async function shareOrDownloadBackup(): Promise<void> {
     await navigator.share({
       files: [file],
       title: 'look. backup',
-      text: 'Бэкап луков — сохрани в Файлы / iCloud Drive',
+      text: 'Копия луков — сохрани в Файлы',
     })
     return
   }
@@ -111,6 +113,8 @@ export async function importBackupPayload(
     const { photoBase64, ...rest } = item
     return {
       ...rest,
+      feedback: normalizeFeedback(rest.feedback),
+      favorite: rest.favorite === true ? true : undefined,
       photoBlob: base64ToBlob(photoBase64),
     }
   })

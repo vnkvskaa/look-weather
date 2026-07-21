@@ -105,6 +105,16 @@ function formatDateRu(iso: string, time?: string) {
   return time ? `${day}, ${time}` : day
 }
 
+function lookCountLabel(n: number): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return `${n} лук`
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) {
+    return `${n} лука`
+  }
+  return `${n} луков`
+}
+
 function formatPickerDate(iso: string) {
   const d = new Date(iso + 'T12:00:00')
   return d.toLocaleDateString('ru-RU', {
@@ -315,8 +325,7 @@ function ItemTagsPicker({
     <div className="item-tags">
       <p className="item-tags-label">слои</p>
       <p className="item-tags-hint">
-        Отметь «слой», если была куртка или дождевик — в дождь такие образы
-        выше.
+        «Слой» — куртка или дождевик. В дождь такие луки поднимаю выше.
       </p>
       <div className="item-tags-row">
         {ITEM_TAGS.map((tag) => (
@@ -1778,9 +1787,9 @@ function BackupPanel({
         : 'idle'
 
   const bannerText = autoError
-    ? `Автосохранение не удалось: ${autoError}`
+    ? `Не удалось автосохранить: ${autoError}`
     : setupDone
-      ? 'Всё ок — копии сохраняются сами'
+      ? 'Копии сохраняются сами'
       : gap
         ? `Осталось: ${gap}`
         : 'Копия ещё не настроена'
@@ -1807,7 +1816,7 @@ function BackupPanel({
               setStatus(null)
             }}
           >
-            настроить за 3 шага
+            настроить
           </button>
         ) : null}
         {autoError ? (
@@ -1855,13 +1864,13 @@ function BackupPanel({
 
       {wizard && (
         <div className="backup-wizard">
-          <p className="backup-wizard-step">шаг {Math.min(step, 3)}/3</p>
+          <p className="backup-wizard-step">шаг {Math.min(step, 3)} из 3</p>
 
           {step === 1 && (
             <div className="backup-wizard-body">
               <p>
-                Нужен бесплатный вход на github.com. Если аккаунта нет —
-                зарегистрируйся, это бесплатно.
+                Нужен бесплатный аккаунт на github.com. Если его нет —
+                зарегистрируйся.
               </p>
               <a
                 className="olive-btn backup-cta"
@@ -1872,9 +1881,9 @@ function BackupPanel({
                 открыть GitHub
               </a>
               <p>
-                Потом создай ключ-пароль для look. На странице отметь только
-                право <code>gist</code>, нажми Generate token и сразу скопируй
-                длинную строку (её показывают один раз).
+                Потом создай ключ для look. На странице отметь только право{' '}
+                <code>gist</code>, нажми Generate token и сразу скопируй
+                длинную строку — её показывают один раз.
               </p>
               <a
                 className="olive-btn backup-cta"
@@ -1911,7 +1920,7 @@ function BackupPanel({
 
           {step === 2 && (
             <div className="backup-wizard-body">
-              <p>Вставь ключ сюда. Мы сразу проверим, подходит ли он.</p>
+              <p>Вставь ключ сюда — сразу проверим, подходит ли он.</p>
               <div className="field">
                 <label htmlFor="gh-token-wiz">ключ</label>
                 <input
@@ -1945,8 +1954,8 @@ function BackupPanel({
           {step === 3 && (
             <div className="backup-wizard-body">
               <p>
-                Последний шаг: сохранить первую копию луков. После этого
-                look. будет обновлять её сам.
+                Сохрани первую копию луков. Дальше look. будет обновлять её
+                сам.
               </p>
               <button
                 type="button"
@@ -1954,7 +1963,7 @@ function BackupPanel({
                 disabled={busy}
                 onClick={() => void saveFirstCopy()}
               >
-                {busy ? 'сохраняю…' : 'сохранить первую копию сейчас'}
+                {busy ? 'сохраняю…' : 'сохранить первую копию'}
               </button>
               <button
                 type="button"
@@ -1971,7 +1980,7 @@ function BackupPanel({
             className="text-btn"
             onClick={() => setWizard(false)}
           >
-            закрыть мастер
+            закрыть
           </button>
         </div>
       )}
@@ -2002,7 +2011,7 @@ function BackupPanel({
             disabled={busy}
             onClick={() => void runVerify()}
           >
-            проверить
+            проверить копию
           </button>
           <button
             type="button"
@@ -2020,8 +2029,8 @@ function BackupPanel({
       {status && <p className="status">{status}</p>}
       {error && <p className="error">{error}</p>}
       <p className="field-hint">
-        Не публикуй ключ и не клади луки в публичный код. На новом телефоне:
-        вставь тот же ключ → восстановить.
+        Ключ храни только на телефоне. На новом устройстве: вставь тот же
+        ключ → восстановить.
       </p>
     </div>
   )
@@ -2152,7 +2161,7 @@ function SettingsScreen({
       const result = await importBackupFile(file)
       suppressAutoBackup()
       setStatus(
-        `слито луков: ${result.imported} · всего в архиве: ${result.total}`,
+        `добавлено: ${result.imported}, всего ${result.total}`,
       )
       window.location.reload()
     } catch (e) {
@@ -2173,7 +2182,7 @@ function SettingsScreen({
       <div className="settings-stack">
         <p>
           Домашний город — для «сегодня» и луков без GPS. В поездке можно
-          временно сменить город.
+          поставить другой город на время.
         </p>
         <p className="meta-chip">
           сейчас · {formatPlaceShort(settings.placeName)}
@@ -2198,7 +2207,7 @@ function SettingsScreen({
                   className="olive-btn"
                   onClick={() => void returnHome()}
                 >
-                  вернуться домой
+                  домой
                 </button>
               ) : (
                 <button
@@ -2206,14 +2215,14 @@ function SettingsScreen({
                   className="ghost-btn"
                   onClick={() => setTravelMode(true)}
                 >
-                  временно другой город
+                  другой город на время
                 </button>
               )}
             </div>
           </>
         ) : (
           <div className="travel-editor">
-            <p className="status">Куда едешь? Домашний город сохранится.</p>
+            <p className="status">Куда едешь? Домашний город останется.</p>
             <LocationEditor
               place={place}
               onChange={(next) => void persistTravel(next)}
@@ -2237,17 +2246,17 @@ function SettingsScreen({
 
         <h3 className="settings-sub">файлы</h3>
         <p className="field-hint">
-          Импорт сливает по id: старые локальные луки не пропадают.
+          Импорт дополняет архив: локальные луки с другими id не пропадут.
         </p>
         <button
           type="button"
           className="solid-btn"
           onClick={() => void exportBackup()}
         >
-          экспорт в файлы
+          сохранить в файлы
         </button>
         <label className="file-btn">
-          импорт бэкапа
+          загрузить из файла
           <input
             type="file"
             accept="application/json,.json"
@@ -2262,7 +2271,7 @@ function SettingsScreen({
 }
 
 function autoBackupToastText(status: AutoBackupStatus): string | null {
-  if (status.kind === 'saving') return 'бэкап…'
+  if (status.kind === 'saving') return 'сохраняю копию…'
   if (status.kind === 'ok') return status.message
   if (status.kind === 'error') return status.message
   return null
@@ -2346,7 +2355,7 @@ export default function App() {
           <div className="brand">
             look<span>.</span>
           </div>
-          <div className="meta-chip">{looks.length} looks</div>
+          <div className="meta-chip">{lookCountLabel(looks.length)}</div>
         </header>
 
         {tab === 'today' && (
@@ -2411,7 +2420,7 @@ export default function App() {
             ['today', 'сегодня'],
             ['add', 'добавить'],
             ['archive', 'архив'],
-            ['settings', 'ещё'],
+            ['settings', 'настройки'],
           ] as const
         ).map(([id, label]) => (
           <button

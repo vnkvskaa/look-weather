@@ -9,6 +9,7 @@ import {
   weatherTips,
   windAdvice,
 } from './recommend'
+import { normalizeFeedback } from '../types'
 import type { Look, WeatherProfile } from '../types'
 
 function weather(partial: Partial<WeatherProfile>): WeatherProfile {
@@ -38,23 +39,54 @@ function look(partial: Partial<Look> & Pick<Look, 'id' | 'weather'>): Look {
   }
 }
 
-describe('effectiveWarmth', () => {
-  it('shifts too_cold upward (outfit suits warmer weather)', () => {
-    const l = look({
-      id: '1',
-      weather: weather({ feelsLike: 10 }),
-      feedback: 'too_cold',
-    })
-    expect(effectiveWarmth(l)).toBe(13.5)
+describe('normalizeFeedback', () => {
+  it('migrates old 3-way values', () => {
+    expect(normalizeFeedback('too_cold')).toBe('cold')
+    expect(normalizeFeedback('ok')).toBe('ok')
+    expect(normalizeFeedback('too_hot')).toBe('hot')
   })
 
-  it('shifts too_hot downward (outfit suits colder weather)', () => {
+  it('keeps new 5-way values', () => {
+    expect(normalizeFeedback('cool')).toBe('cool')
+    expect(normalizeFeedback('warm')).toBe('warm')
+  })
+})
+
+describe('effectiveWarmth', () => {
+  it('shifts cold upward (outfit suits warmer weather)', () => {
     const l = look({
       id: '1',
       weather: weather({ feelsLike: 10 }),
-      feedback: 'too_hot',
+      feedback: 'cold',
     })
-    expect(effectiveWarmth(l)).toBe(6.5)
+    expect(effectiveWarmth(l)).toBe(15)
+  })
+
+  it('shifts cool halfway up', () => {
+    const l = look({
+      id: '1',
+      weather: weather({ feelsLike: 10 }),
+      feedback: 'cool',
+    })
+    expect(effectiveWarmth(l)).toBe(12.5)
+  })
+
+  it('shifts hot downward (outfit suits colder weather)', () => {
+    const l = look({
+      id: '1',
+      weather: weather({ feelsLike: 10 }),
+      feedback: 'hot',
+    })
+    expect(effectiveWarmth(l)).toBe(5)
+  })
+
+  it('shifts warm halfway down', () => {
+    const l = look({
+      id: '1',
+      weather: weather({ feelsLike: 10 }),
+      feedback: 'warm',
+    })
+    expect(effectiveWarmth(l)).toBe(7.5)
   })
 })
 
@@ -86,16 +118,66 @@ describe('rankLooks', () => {
       id: 'base',
       date: '2026-03-01',
       weather: weather({ date: '2026-03-01', feelsLike: 10 }),
-      feedback: 'too_cold',
+      feedback: 'cold',
     })
     const other = look({
       id: 'other',
       date: '2026-04-01',
       weather: weather({ date: '2026-04-01', feelsLike: 16 }),
     })
-    const warmTarget = weather({ date: '2026-07-20', feelsLike: 13 })
+    const warmTarget = weather({ date: '2026-07-20', feelsLike: 14 })
     const ranked = rankLooks([other, base], warmTarget, 2)
     expect(ranked[0].look.id).toBe('base')
+    expect(ranked[0].reason).toMatch(/холодно/)
+  })
+
+  it('mild favorite boost among similar weather, not bad matches', () => {
+    const target = weather({
+      date: '2026-07-21',
+      feelsLike: 12,
+      windMs: 2,
+      humidity: 50,
+      cloudCover: 40,
+    })
+    const close = look({
+      id: 'close',
+      date: '2026-06-01',
+      weather: weather({
+        date: '2026-06-01',
+        feelsLike: 12.4,
+        windMs: 2,
+        humidity: 50,
+        cloudCover: 40,
+      }),
+    })
+    const favClose = look({
+      id: 'fav-close',
+      date: '2026-05-01',
+      favorite: true,
+      weather: weather({
+        date: '2026-05-01',
+        feelsLike: 12.5,
+        windMs: 2,
+        humidity: 50,
+        cloudCover: 40,
+      }),
+    })
+    const favFar = look({
+      id: 'fav-far',
+      date: '2026-04-01',
+      favorite: true,
+      weather: weather({
+        date: '2026-04-01',
+        feelsLike: 28,
+        windMs: 2,
+        humidity: 50,
+        cloudCover: 40,
+      }),
+    })
+    const ranked = rankLooks([close, favClose, favFar], target, 3)
+    expect(ranked[0].look.id).toBe('fav-close')
+    expect(ranked[2].look.id).toBe('fav-far')
+    expect(ranked[0].reason).toMatch(/избранн/)
   })
 
   it('orders by weather match, not by date or createdAt', () => {
@@ -151,7 +233,7 @@ describe('rankLooks', () => {
     ])
     expect(ranked[0].matchPercent).toBeGreaterThan(ranked[1].matchPercent)
     expect(ranked[1].matchPercent).toBeGreaterThan(ranked[2].matchPercent)
-    expect(ranked[0].reason).toMatch(/совпадение \d+%/)
+    expect(ranked[0].reason).toMatch(/похоже/)
   })
 
   it('excludes looks from the same calendar day as target', () => {

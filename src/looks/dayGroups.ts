@@ -78,7 +78,21 @@ export function groupLooksByDate(
   })
 }
 
-/** Shared place line: primary name, or «A · +N ещё» on conflict. */
+/** Active look’s place — never a fake merge of mixed cities. */
+export function activePlaceLabel(look: Look): string {
+  return look.placeName?.trim() || '—'
+}
+
+/** How many distinct places in a day (for optional «N мест» hint). */
+export function distinctPlaceCount(group: DayGroup): number {
+  return new Set(
+    group.looks
+      .map((l) => l.placeName?.trim())
+      .filter((n): n is string => Boolean(n)),
+  ).size
+}
+
+/** @deprecated Prefer activePlaceLabel(active) — kept for tests / summary bits. */
 export function placeSummary(group: DayGroup): string {
   const names = [
     ...new Set(
@@ -89,9 +103,7 @@ export function placeSummary(group: DayGroup): string {
   ]
   if (names.length === 0) return group.primary.placeName || '—'
   if (names.length === 1) return names[0]
-  const primary = group.primary.placeName?.trim() || names[0]
-  const extra = names.length - 1
-  return `${primary} · +${extra} ещё`
+  return `${names.length} места`
 }
 
 /** Weather line from the primary look (shared card summary). */

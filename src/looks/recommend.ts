@@ -5,21 +5,33 @@ import type {
   RankedLook,
   WeatherProfile,
 } from '../types'
+import { FEEDBACK_LABEL } from '../types'
 import { groupLooksByDate } from './dayGroups'
 
 /**
  * Feedback is about the outfit on that day's weather:
- * - too_cold → clothes were too thin for W → comfort point is warmer than W
- * - too_hot  → clothes were too warm for W → comfort point is colder than W
+ * - cold / cool → clothes were too thin for W → comfort point is warmer than W
+ * - warm / hot  → clothes were too warm for W → comfort point is colder than W
+ *
+ * Shifts in °C comfort point (symmetric around ok).
  */
 const FEEDBACK_SHIFT: Record<Feedback, number> = {
-  too_cold: 3.5,
+  cold: 5,
+  cool: 2.5,
   ok: 0,
-  too_hot: -3.5,
+  warm: -2.5,
+  hot: -5,
 }
 
 /** Light boost when rainy target and look tagged «слой». */
 const LAYER_WET_BONUS = 1.4
+
+/**
+ * Mild favorite boost — only when already weather-similar.
+ * Cap keeps a starred bad match from beating a clearly better day.
+ */
+const FAVORITE_SIMILAR_MAX = 10
+const FAVORITE_BONUS = 0.85
 
 export function effectiveWarmth(look: Look): number {
   const shift = look.feedback ? FEEDBACK_SHIFT[look.feedback] : 0
@@ -36,11 +48,11 @@ export function rainAdvice(target: WeatherProfile): string | null {
   if (target.precipMm >= 2 || target.precipProb >= 70) {
     return 'возьми защиту от дождя'
   }
-  return 'возможен дождь — лучше взять защиту'
+  return 'возможен дождь'
 }
 
 export function windAdvice(target: WeatherProfile): string | null {
-  if (target.windMs >= 8) return 'сильный ветер — учти слой'
+  if (target.windMs >= 8) return 'сильный ветер'
   if (target.windMs >= 5.5) return 'ветрено'
   return null
 }
@@ -90,6 +102,11 @@ export function weatherDistance(
     distance = Math.max(0, distance - LAYER_WET_BONUS)
   }
 
+  // Favorite: mild nudge only among already similar weather.
+  if (look.favorite && distance <= FAVORITE_SIMILAR_MAX) {
+    distance = Math.max(0, distance - FAVORITE_BONUS)
+  }
+
   return { distance, warmth }
 }
 
@@ -99,51 +116,35 @@ export function matchPercent(distance: number): number {
   return Math.max(1, Math.min(99, pct))
 }
 
+/** One short plain line under a card — no jargon stack. */
 function buildReason(
   look: Look,
   target: WeatherProfile,
-  warmth: number,
-  pct: number,
+  _warmth: number,
+  _pct: number,
 ): string {
-  const bits: string[] = [`совпадение ${pct}%`]
-
-  const tempGap = Math.round(target.feelsLike - warmth)
-  if (Math.abs(tempGap) <= 1) {
-    bits.push('почти та же теплота')
-  } else if (tempGap > 0) {
-    bits.push(`лук чуть прохладнее цели (~${Math.round(warmth)}°)`)
-  } else {
-    bits.push(`лук чуть теплее цели (~${Math.round(warmth)}°)`)
+  if (precipMismatch(target, look.weather) && isWet(target)) {
+    return hasLayer(look)
+      ? 'похоже · тогда был слой от дождя'
+      : 'похоже · возьми защиту от дождя'
+  }
+  if (isWet(target) && hasLayer(look)) {
+    return 'похоже · есть защита от дождя'
+  }
+  if (isWet(target)) {
+    return rainAdvice(target) ?? 'похоже · возьми защиту от дождя'
   }
 
-  if (look.feedback === 'too_cold') {
-    bits.push('в той одежде было холодно')
-  } else if (look.feedback === 'too_hot') {
-    bits.push('в той одежде было жарко')
+  if (look.feedback && look.feedback !== 'ok') {
+    return `похоже · тогда было ${FEEDBACK_LABEL[look.feedback]}`
   }
-
-  if (precipMismatch(target, look.weather)) {
-    bits.push(
-      isWet(target)
-        ? 'сейчас сыро — лук был в сухой день · возьми защиту от дождя'
-        : 'лук был в дождь — сейчас суше',
-    )
-  } else if (isWet(target)) {
-    if (hasLayer(look)) {
-      bits.push('есть слой · ' + (rainAdvice(target) ?? 'возьми защиту от дождя'))
-    } else {
-      bits.push(rainAdvice(target) ?? 'возьми защиту от дождя')
-    }
-  } else if (look.weather.windMs >= 4.5 && target.windMs >= 4.5) {
-    bits.push('похожий ветер')
+  if (look.favorite) {
+    return 'похоже · из избранного'
   }
 
   const wind = windAdvice(target)
-  if (wind && !bits.some((b) => b.includes('ветер'))) {
-    bits.push(wind)
-  }
-
-  return bits.join(' · ')
+  if (wind) return `похоже · ${wind}`
+  return 'похоже'
 }
 
 function rankOne(look: Look, target: WeatherProfile): RankedLook {
