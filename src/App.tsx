@@ -451,6 +451,7 @@ function DayPhotoStrip({
         <Photo
           lookId={active.id}
           alt={`Лук ${active.date}${active.time ? ` ${active.time}` : ''}`}
+          variant="full"
         />
         {badge ? <span className="match-badge">{badge}</span> : null}
         {favorite ? (
@@ -472,7 +473,7 @@ function DayPhotoStrip({
               data-favorite={look.favorite === true}
               onClick={() => onSelect(look.id)}
             >
-              <Photo lookId={look.id} alt="" />
+              <Photo lookId={look.id} alt="" variant="thumb" />
             </button>
           ))}
         </div>
@@ -1445,7 +1446,7 @@ function AddLookScreen({
         <h2 className="block-title">в этой одежде было?</h2>
         <div className="form-stack">
           <div className="photo-drop corner has-photo">
-            <Photo lookId={pendingFeedback.id} alt="Сохранённый лук" />
+            <Photo lookId={pendingFeedback.id} alt="Сохранённый лук" variant="full" />
           </div>
           <p className="status">
             {formatDateRu(pendingFeedback.date, pendingFeedback.time)} ·{' '}
@@ -2807,8 +2808,9 @@ function SettingsScreen({
           <p className="field-hint">оценка места недоступна в этом браузере</p>
         )}
         <p className="field-hint">
-          В списках — маленькие превью. Полные фото подгружаются отдельно, чтобы
-          архив не забивал память.
+          Новые фото сохраняются крупнее (~1600px), чтобы лук было видно. В
+          списках превью маленькие, в карточке — полное фото. Уже сжатые раньше
+          кадры не «улучшатся» сами — их можно загрузить заново.
         </p>
         <button
           type="button"
@@ -2820,7 +2822,7 @@ function SettingsScreen({
             ? recompressProgress && recompressProgress.total > 0
               ? `сжимаю… ${recompressProgress.done}/${recompressProgress.total}`
               : 'сжимаю…'
-            : 'сжать старые фото'}
+            : 'освободить место (сжать фото)'}
         </button>
 
         <h3 className="settings-sub">файлы</h3>

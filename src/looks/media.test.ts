@@ -7,11 +7,11 @@ import {
 } from './media'
 
 describe('photo size defaults', () => {
-  it('uses aggressive main + thumb limits', () => {
-    expect(PHOTO_MAIN.maxSide).toBeLessThanOrEqual(1100)
-    expect(PHOTO_MAIN.quality).toBeLessThanOrEqual(0.75)
-    expect(PHOTO_THUMB.maxSide).toBeLessThanOrEqual(400)
-    expect(PHOTO_THUMB.quality).toBeLessThanOrEqual(0.75)
+  it('keeps main photos sharp enough to read outfits', () => {
+    expect(PHOTO_MAIN.maxSide).toBeGreaterThanOrEqual(1400)
+    expect(PHOTO_MAIN.quality).toBeGreaterThanOrEqual(0.82)
+    expect(PHOTO_THUMB.maxSide).toBeLessThan(PHOTO_MAIN.maxSide)
+    expect(PHOTO_THUMB.maxSide).toBeGreaterThanOrEqual(400)
   })
 })
 

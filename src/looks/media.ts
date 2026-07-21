@@ -16,11 +16,11 @@ export type PhotoMeta = PhotoTakenAt & {
   gps?: PhotoGps
 }
 
-/** Main photo stored locally — aggressive enough for hundreds of looks. */
-export const PHOTO_MAIN = { maxSide: 1024, quality: 0.72 } as const
-/** List / archive thumbs on device. */
-export const PHOTO_THUMB = { maxSide: 360, quality: 0.7 } as const
-/** Optional GitHub preview — tiny, recompressed on upload. */
+/** Main photo on device — sharp enough to judge an outfit. */
+export const PHOTO_MAIN = { maxSide: 1600, quality: 0.86 } as const
+/** List / archive strip thumbs (small UI only). */
+export const PHOTO_THUMB = { maxSide: 480, quality: 0.78 } as const
+/** Optional tiny cloud preview — not used for on-device viewing. */
 export const PHOTO_CLOUD_THUMB = { maxSide: 220, quality: 0.55 } as const
 /** Soft cap per look thumb before base64 (~80–100KB binary). */
 export const CLOUD_THUMB_MAX_BYTES = 96 * 1024
