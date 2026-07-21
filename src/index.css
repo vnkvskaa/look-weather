@@ -837,11 +837,25 @@ img {
   transform: rotate(180deg);
 }
 
+.backup-guide-body {
+  display: grid;
+  gap: 16px;
+}
+
+.backup-guide-lead {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: 18px;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
 .backup-guide-steps {
   margin: 0;
-  padding: 0 0 0 1.2em;
+  padding: 0;
+  list-style: none;
   display: grid;
-  gap: 12px;
+  gap: 18px;
   font-family: var(--font-serif);
   font-size: 17px;
   line-height: 1.4;
@@ -849,7 +863,9 @@ img {
 }
 
 .backup-guide-steps li {
-  padding-left: 4px;
+  display: grid;
+  gap: 8px;
+  padding: 0;
 }
 
 .backup-guide-steps strong {
@@ -858,19 +874,89 @@ img {
   font-weight: 500;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  display: block;
-  margin-bottom: 4px;
   color: var(--olive-mid);
 }
 
-.backup-guide-steps a {
+.backup-guide-step-text {
+  margin: 0;
+}
+
+.backup-guide-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 16px;
+  text-decoration: none;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.backup-guide-more-toggle {
+  justify-self: start;
+  padding: 4px 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.02em;
   color: var(--olive);
+  text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.backup-guide-details {
+  margin: 0;
+  padding: 10px 0 0 1.1em;
+  display: grid;
+  gap: 8px;
+  font-size: 16px;
+  color: var(--ink-soft);
+}
+
+.backup-guide-details li::marker {
+  color: var(--olive-mid);
 }
 
 .backup-guide-steps code {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
+  padding: 1px 4px;
+  background: var(--paper);
+}
+
+.backup-guide-dont {
+  display: grid;
+  gap: 8px;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.backup-guide-dont-title {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--danger);
+}
+
+.backup-guide-dont ul {
+  margin: 0;
+  padding: 0 0 0 1.1em;
+  display: grid;
+  gap: 8px;
+  font-family: var(--font-serif);
+  font-size: 16px;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
+.backup-guide-footnote {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-soft);
 }
 
 .travel-editor {

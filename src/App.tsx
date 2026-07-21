@@ -849,7 +849,7 @@ function TodayScreen({
 
       {showBackupHint && (
         <div className="soft-nudge corner">
-          <p>Пора бэкапнуть луки — в приватный Gist на GitHub.</p>
+          <p>Пора сохранить запасную копию луков в GitHub.</p>
           <div className="nudge-actions">
             <button
               type="button"
@@ -974,7 +974,7 @@ function TodayScreen({
             className="ghost-btn"
             onClick={() => onOpenSettings('backup')}
           >
-            как сохранить бэкап
+            как сделать запасную копию
           </button>
         </div>
       )}
@@ -1466,6 +1466,7 @@ function ArchiveScreen({
 
 function BackupSetupGuide({ open }: { open: boolean }) {
   const [expanded, setExpanded] = useState(open)
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -1487,42 +1488,111 @@ function BackupSetupGuide({ open }: { open: boolean }) {
       >
         <span className="section-kicker">инструкция</span>
         <span className="backup-guide-title">
-          как настроить бэкап
+          как сделать запасную копию
           <span className="backup-guide-chevron" data-open={expanded}>
             ▾
           </span>
         </span>
       </button>
       {expanded && (
-        <ol className="backup-guide-steps">
-          <li>
-            <strong>Токен на GitHub.</strong> Открой{' '}
-            <a
-              href="https://github.com/settings/tokens/new"
-              target="_blank"
-              rel="noreferrer"
-            >
-              github.com/settings/tokens/new
-            </a>
-            . Войди в аккаунт. Note — любое имя, например «look». Срок — можно
-            без срока. Галочка только <code>gist</code>. Generate token →
-            скопируй (потом не покажут).
-          </li>
-          <li>
-            <strong>Вставь сюда.</strong> Поле «GitHub PAT» ниже → вставь →
-            «сохранить токен». Включи «автобэкап».
-          </li>
-          <li>
-            <strong>Что происходит.</strong> Луки уходят в приватный Gist — не
-            в публичный репозиторий look-weather. Токен остаётся только на
-            этом телефоне.
-          </li>
-          <li>
-            <strong>Новый телефон.</strong> Открой look. → «ещё» → вставь тот
-            же токен → «восстановить из GitHub». Локальные луки не сотрутся:
-            совпадения по id обновятся, остальные останутся.
-          </li>
-        </ol>
+        <div className="backup-guide-body">
+          <p className="backup-guide-lead">
+            Бэкап — это запасная копия твоих луков в аккаунте GitHub. Как
+            закрытая папка в облаке: только ты её видишь. Если телефон
+            сломается или купишь новый — луки можно вернуть.
+          </p>
+
+          <ol className="backup-guide-steps">
+            <li>
+              <strong>1. Аккаунт GitHub</strong>
+              Нужен бесплатный аккаунт. Если его ещё нет — зарегистрируйся
+              (это бесплатно).
+              <a
+                className="backup-guide-cta olive-btn"
+                href="https://github.com/login"
+                target="_blank"
+                rel="noreferrer"
+              >
+                открыть GitHub
+              </a>
+            </li>
+            <li>
+              <strong>2. Создай ключ-пароль</strong>
+              Открой эту страницу — она создаёт секретный ключ для look.:
+              <a
+                className="backup-guide-cta olive-btn"
+                href="https://github.com/settings/tokens/new"
+                target="_blank"
+                rel="noreferrer"
+              >
+                создать ключ на GitHub
+              </a>
+              <p className="backup-guide-step-text">
+                На странице поставь галочку только у <code>gist</code> — это
+                разрешение сохранить копию. Потом нажми Generate token и
+                скопируй длинный пароль (его показывают один раз).
+              </p>
+              <button
+                type="button"
+                className="backup-guide-more-toggle"
+                aria-expanded={detailsOpen}
+                onClick={() => setDetailsOpen((v) => !v)}
+              >
+                {detailsOpen ? 'скрыть подробности' : 'подробнее про страницу'}
+              </button>
+              {detailsOpen && (
+                <ul className="backup-guide-details">
+                  <li>
+                    В поле Note напиши любое имя, например «look» — это
+                    подпись для себя.
+                  </li>
+                  <li>
+                    Expiration (срок) можно оставить без срока или выбрать
+                    длинный срок.
+                  </li>
+                  <li>
+                    В списке прав отметь только gist. Другие галочки не нужны.
+                  </li>
+                  <li>
+                    Generate token → появится длинная строка, начинающаяся с
+                    ghp_… Скопируй её сразу: потом GitHub её больше не
+                    покажет.
+                  </li>
+                </ul>
+              )}
+            </li>
+            <li>
+              <strong>3. Вставь ключ в look.</strong>
+              Поле «ключ от GitHub» ниже → вставь скопированное → «сохранить
+              ключ» → включи «сохранять копию автоматически».
+            </li>
+            <li>
+              <strong>4. Готово</strong>
+              Копии начинают сохраняться сами после новых луков и правок. На
+              новом телефоне: открой look. → «ещё» → вставь тот же ключ →
+              «восстановить из GitHub». Старые луки на телефоне не сотрутся.
+            </li>
+          </ol>
+
+          <div className="backup-guide-dont">
+            <p className="backup-guide-dont-title">чего не делать</p>
+            <ul>
+              <li>
+                Не клади фото и луки в публичный код look-weather — туда
+                только программа, не твои снимки.
+              </li>
+              <li>
+                Не отправляй ключ никому и не публикуй его. У кого ключ — у
+                того доступ к твоей копии.
+              </li>
+            </ul>
+          </div>
+
+          <p className="backup-guide-footnote">
+            Технически копия лежит как закрытый файл в аккаунте GitHub. Знать
+            слово «gist» не обязательно.
+          </p>
+        </div>
       )}
     </div>
   )
@@ -1649,8 +1719,8 @@ function SettingsScreen({
     onSettings(next)
     setStatus(
       trimmed
-        ? 'токен сохранён на этом телефоне'
-        : 'токен удалён с телефона',
+        ? 'ключ сохранён на этом телефоне'
+        : 'ключ удалён с телефона',
     )
     setError(null)
   }
@@ -1662,7 +1732,11 @@ function SettingsScreen({
     }
     await saveSettings(next)
     onSettings(next)
-    setStatus(on ? 'автобэкап включён' : 'автобэкап выключен')
+    setStatus(
+      on
+        ? 'автосохранение копии включено'
+        : 'автосохранение копии выключено',
+    )
     setError(null)
   }
 
@@ -1705,8 +1779,8 @@ function SettingsScreen({
       onSettings(refreshed)
       setStatus(
         result.recompressed
-          ? `сохранено в GitHub (gist ${result.gistId.slice(0, 8)}…) — фото сжаты сильнее`
-          : `сохранено в GitHub (gist ${result.gistId.slice(0, 8)}…)`,
+          ? 'сохранено в GitHub — фото сжаты сильнее'
+          : 'сохранено в GitHub',
       )
     } catch (e) {
       setError((e as Error).message)
@@ -1803,11 +1877,15 @@ function SettingsScreen({
           </div>
         )}
 
-        <h3 className="settings-sub">бэкап в GitHub</h3>
+        <h3 className="settings-sub">запасная копия на GitHub</h3>
+        <p className="field-hint">
+          Закрытая копия луков в твоём аккаунте GitHub — не в публичном коде
+          приложения.
+        </p>
         <BackupSetupGuide open={focusBackup} />
 
         <div className="field">
-          <label htmlFor="gh-token">GitHub PAT</label>
+          <label htmlFor="gh-token">ключ от GitHub</label>
           <input
             id="gh-token"
             type="password"
@@ -1815,13 +1893,13 @@ function SettingsScreen({
             spellCheck={false}
             value={token}
             onChange={(e) => setToken(e.target.value)}
-            placeholder="ghp_… или github_pat_…"
+            placeholder="длинный пароль, начинается с ghp_…"
           />
         </div>
         <p className="field-hint">
-          Нужно право <code>gist</code>.
+          Вставь ключ из шага 2 инструкции выше.
           {settings.githubGistId
-            ? ` Gist: ${settings.githubGistId.slice(0, 10)}…`
+            ? ' Копия на GitHub уже есть — можно восстанавливать.'
             : ''}
         </p>
         <button
@@ -1829,7 +1907,7 @@ function SettingsScreen({
           className="ghost-btn"
           onClick={() => void saveToken()}
         >
-          сохранить токен
+          сохранить ключ
         </button>
         <label className="auto-backup-row">
           <input
@@ -1839,11 +1917,11 @@ function SettingsScreen({
             onChange={(e) => void setAutoBackup(e.target.checked)}
           />
           <span>
-            автобэкап
+            сохранять копию автоматически
             <span className="field-hint">
               {settings.githubToken?.trim()
-                ? 'После новых луков и правок — в тот же Gist, в фоне.'
-                : 'Сначала сохрани токен.'}
+                ? 'После новых луков и правок look. сам обновит копию на GitHub.'
+                : 'Сначала сохрани ключ.'}
             </span>
           </span>
         </label>
@@ -1854,7 +1932,7 @@ function SettingsScreen({
             disabled={busy}
             onClick={() => void githubSave()}
           >
-            {busy ? '…' : 'сохранить в GitHub'}
+            {busy ? '…' : 'сохранить копию сейчас'}
           </button>
           <button
             type="button"

@@ -47,7 +47,7 @@ async function buildSizedBackup(): Promise<{
 
   if (json.length > GIST_HARD_BYTES) {
     throw new Error(
-      'Бэкап слишком большой для Gist. Экспортируй в файлы или сократи архив.',
+      'Копия слишком большая для GitHub. Экспортируй в файлы или сократи архив.',
     )
   }
 
@@ -65,7 +65,7 @@ export async function saveBackupToGithub(): Promise<GithubBackupResult> {
   const settings = await getSettings()
   const token = settings.githubToken?.trim()
   if (!token) {
-    throw new Error('Сначала вставь GitHub-токен в настройках')
+    throw new Error('Сначала вставь ключ от GitHub в настройках')
   }
 
   const { json, recompressed } = await buildSizedBackup()
@@ -91,7 +91,7 @@ export async function saveBackupToGithub(): Promise<GithubBackupResult> {
     const err = (await res.json().catch(() => ({}))) as GistResponse
     if (res.status === 401 || res.status === 403) {
       throw new Error(
-        'Токен не принят. Нужен classic PAT с правом gist (или fine-grained на gists).',
+        'Ключ не принят. Создай новый по инструкции: галочка только у gist.',
       )
     }
     if (res.status === 404 && gistId) {
@@ -102,7 +102,7 @@ export async function saveBackupToGithub(): Promise<GithubBackupResult> {
         body: JSON.stringify(body),
       })
       if (!created.ok) {
-        throw new Error('Не удалось создать gist')
+        throw new Error('Не удалось создать копию на GitHub')
       }
       const data = (await created.json()) as GistResponse
       return finishSave(settings, data.id, recompressed, json.length)
@@ -138,10 +138,10 @@ export async function restoreBackupFromGithub(): Promise<{
   const token = settings.githubToken?.trim()
   const gistId = settings.githubGistId?.trim()
   if (!token) {
-    throw new Error('Сначала вставь GitHub-токен')
+    throw new Error('Сначала вставь ключ от GitHub')
   }
   if (!gistId) {
-    throw new Error('Пока нет сохранённого gist — сначала сохрани бэкап')
+    throw new Error('Пока нет сохранённой копии — сначала сохрани бэкап')
   }
 
   const res = await fetch(`https://api.github.com/gists/${gistId}`, {
@@ -149,9 +149,11 @@ export async function restoreBackupFromGithub(): Promise<{
   })
   if (!res.ok) {
     if (res.status === 404) {
-      throw new Error('Gist не найден — проверь id или сохрани заново')
+      throw new Error(
+        'Копия на GitHub не найдена — сохрани заново или проверь ключ',
+      )
     }
-    throw new Error(`Не удалось прочитать gist (${res.status})`)
+    throw new Error(`Не удалось прочитать копию на GitHub (${res.status})`)
   }
 
   const data = (await res.json()) as GistResponse
@@ -159,7 +161,7 @@ export async function restoreBackupFromGithub(): Promise<{
     data.files?.[GIST_FILENAME] ??
     Object.values(data.files ?? {})[0]
   if (!file?.content) {
-    throw new Error('В gist нет файла бэкапа')
+    throw new Error('В копии на GitHub нет файла бэкапа')
   }
 
   // Large files may need a raw_url fetch — GitHub truncates sometimes
@@ -171,7 +173,7 @@ export async function restoreBackupFromGithub(): Promise<{
     const rawRes = await fetch(raw, {
       headers: { Authorization: `Bearer ${token.trim()}` },
     })
-    if (!rawRes.ok) throw new Error('Не удалось скачать полный gist')
+    if (!rawRes.ok) throw new Error('Не удалось скачать полную копию')
     text = await rawRes.text()
   }
 
