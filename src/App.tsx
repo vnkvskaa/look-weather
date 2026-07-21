@@ -295,6 +295,12 @@ function FeedbackBar({
   const index = value
     ? FEEDBACK_STEPS.findIndex((s) => s.id === value)
     : -1
+  const [draft, setDraft] = useState(note ?? '')
+  const focusedRef = useRef(false)
+
+  useEffect(() => {
+    if (!focusedRef.current) setDraft(note ?? '')
+  }, [note])
 
   return (
     <div className="feedback-block">
@@ -335,8 +341,15 @@ function FeedbackBar({
         <input
           className="feedback-note"
           type="text"
-          value={note ?? ''}
-          onChange={(e) => onNoteChange(e.target.value.slice(0, 80))}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value.slice(0, 80))}
+          onFocus={() => {
+            focusedRef.current = true
+          }}
+          onBlur={() => {
+            focusedRef.current = false
+            onNoteChange(draft)
+          }}
           placeholder="короткая заметка…"
           maxLength={80}
           aria-label="заметка к ощущению"
@@ -2899,11 +2912,12 @@ export default function App() {
   }
 
   async function onFeedbackNote(id: string, note: string) {
+    const cleaned = note.trim()
     const look = looks.find((l) => l.id === id)
     if (!look?.feedback) {
-      await updateLook(id, { feedbackNote: note.trim() || undefined })
+      await updateLook(id, { feedbackNote: cleaned || undefined })
     } else {
-      await updateLookFeedback(id, look.feedback, note.trim() || undefined)
+      await updateLookFeedback(id, look.feedback, cleaned || undefined)
     }
     scheduleAutoBackup('feedback')
     await refresh()
