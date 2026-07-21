@@ -127,6 +127,42 @@ export function blobToObjectUrl(blob: Blob): string {
   return URL.createObjectURL(blob)
 }
 
+/** Stable object URLs keyed by look id — survive IDB re-reads (new Blob refs). */
+type LookObjectUrlEntry = { url: string; fingerprint: string }
+
+const lookObjectUrlCache = new Map<string, LookObjectUrlEntry>()
+
+function blobFingerprint(blob: Blob): string {
+  return `${blob.size}:${blob.type}`
+}
+
+/** Get or create a cached object URL for a look. Revokes only when bytes change. */
+export function getLookObjectUrl(id: string, blob: Blob): string {
+  const fingerprint = blobFingerprint(blob)
+  const existing = lookObjectUrlCache.get(id)
+  if (existing && existing.fingerprint === fingerprint) {
+    return existing.url
+  }
+  if (existing) URL.revokeObjectURL(existing.url)
+  const url = URL.createObjectURL(blob)
+  lookObjectUrlCache.set(id, { url, fingerprint })
+  return url
+}
+
+export function revokeLookObjectUrl(id: string): void {
+  const existing = lookObjectUrlCache.get(id)
+  if (!existing) return
+  URL.revokeObjectURL(existing.url)
+  lookObjectUrlCache.delete(id)
+}
+
+/** Drop cached URLs for looks that are no longer in the library. */
+export function pruneLookObjectUrls(keepIds: ReadonlySet<string>): void {
+  for (const id of lookObjectUrlCache.keys()) {
+    if (!keepIds.has(id)) revokeLookObjectUrl(id)
+  }
+}
+
 export async function blobToBase64(blob: Blob): Promise<string> {
   const buffer = await blob.arrayBuffer()
   const bytes = new Uint8Array(buffer)

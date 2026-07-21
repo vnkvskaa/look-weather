@@ -40,6 +40,9 @@ import {
   compressImage,
   blobToObjectUrl,
   extractPhotoMeta,
+  getLookObjectUrl,
+  pruneLookObjectUrls,
+  revokeLookObjectUrl,
 } from './looks/media'
 import {
   groupLooksByDate,
@@ -141,7 +144,11 @@ function sourceLabel(source?: LocationSource) {
 
 function useLooks() {
   const [looks, setLooks] = useState<Look[]>([])
-  const refresh = async () => setLooks(await listLooks())
+  const refresh = async () => {
+    const next = await listLooks()
+    pruneLookObjectUrls(new Set(next.map((l) => l.id)))
+    setLooks(next)
+  }
   useEffect(() => {
     void refresh()
   }, [])
@@ -151,21 +158,24 @@ function useLooks() {
 function Photo({
   blob,
   alt,
-  imgKey,
+  lookId,
 }: {
   blob: Blob
   alt: string
-  /** Force remount when switching looks so the img always tracks the blob. */
-  imgKey?: string
+  /** When set, object URL is cached by look id and not revoked on re-render. */
+  lookId?: string
 }) {
-  const [url, setUrl] = useState<string | null>(null)
+  const url = useMemo(() => {
+    if (lookId) return getLookObjectUrl(lookId, blob)
+    return blobToObjectUrl(blob)
+  }, [lookId, blob])
+
   useEffect(() => {
-    const u = blobToObjectUrl(blob)
-    setUrl(u)
-    return () => URL.revokeObjectURL(u)
-  }, [blob])
-  if (!url) return null
-  return <img key={imgKey ?? url} src={url} alt={alt} />
+    if (lookId) return
+    return () => URL.revokeObjectURL(url)
+  }, [lookId, url])
+
+  return <img src={url} alt={alt} />
 }
 
 function DatePicker({
@@ -421,8 +431,7 @@ function DayPhotoStrip({
     <div className={multi ? 'day-media' : undefined}>
       <div className="look-thumb">
         <Photo
-          key={active.id}
-          imgKey={active.id}
+          lookId={active.id}
           blob={active.photoBlob}
           alt={`Лук ${active.date}${active.time ? ` ${active.time}` : ''}`}
         />
@@ -447,8 +456,7 @@ function DayPhotoStrip({
               onClick={() => onSelect(look.id)}
             >
               <Photo
-                key={look.id}
-                imgKey={look.id}
+                lookId={look.id}
                 blob={look.photoBlob}
                 alt=""
               />
@@ -957,7 +965,7 @@ function TodayScreen({
           {needFeedback.slice(0, 2).map((look) => (
             <div key={look.id} className="nudge-look">
               <div className="nudge-look-thumb">
-                <Photo blob={look.photoBlob} alt="" />
+                <Photo lookId={look.id} blob={look.photoBlob} alt="" />
               </div>
               <div className="nudge-look-body">
                 <p>{formatDateRu(look.date, look.time)}</p>
@@ -1257,7 +1265,11 @@ function AddLookScreen({
         <h2 className="block-title">в этой одежде было?</h2>
         <div className="form-stack">
           <div className="photo-drop corner has-photo">
-            <Photo blob={pendingFeedback.photoBlob} alt="Сохранённый лук" />
+            <Photo
+              lookId={pendingFeedback.id}
+              blob={pendingFeedback.photoBlob}
+              alt="Сохранённый лук"
+            />
           </div>
           <p className="status">
             {formatDateRu(pendingFeedback.date, pendingFeedback.time)} ·{' '}
@@ -2322,6 +2334,7 @@ export default function App() {
 
   async function onDelete(id: string) {
     await deleteLook(id)
+    revokeLookObjectUrl(id)
     await refresh()
   }
 
